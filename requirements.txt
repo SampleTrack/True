@@ -2,8 +2,11 @@ pyrofork
 tgcrypto
 pymongo
 motor
-marshmallow
+
+
 umongo
+marshmallow<4
+
 requests
 bs4
 imdbpy

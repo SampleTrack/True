@@ -1,168 +1,136 @@
 import logging
 import asyncio
-import re
 from pyrogram import Client, filters, enums
 from pyrogram.errors import FloodWait
-from pyrogram.errors.exceptions.bad_request_400 import (
-    ChannelInvalid, ChatAdminRequired, UsernameInvalid, UsernameNotModified
-)
-from info import ADMINS, INDEX_REQ_CHANNEL as LOG_CHANNEL
-from database.ia_filterdb import save_file
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from info import ADMINS, LOG_CHANNEL
+from database.ia_filterdb import save_file
 
-# Setup logging
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 
-# Global Lock to prevent database corruption during heavy writes
-lock = asyncio.Lock()
+# Lock dictionary to prevent multiple indexing tasks on the same chat
+indexing_locks = {}
+active_cancellations = set()
 
-# Simple state management to avoid global 'temp' conflicts
-class IndexStatus:
-    def __init__(self):
-        self.CANCEL = False
-        self.CURRENT = 0
+def get_lock(chat_id):
+    if chat_id not in indexing_locks:
+        indexing_locks[chat_id] = asyncio.Lock()
+    return indexing_locks[chat_id]
 
-index_status = IndexStatus()
+@Client.on_callback_query(filters.regex(r"^i"))
+async def index_callback_handler(bot, query):
+    data = query.data.split("#")
+    action = data[1]
 
-@Client.on_callback_query(filters.regex(r'^index'))
-async def index_files(bot, query):
-    if query.data.startswith('index_cancel'):
-        index_status.CANCEL = True
-        return await query.answer("Cancelling Indexing...", show_alert=True)
-    
-    # Data format: index#accept#chat_id#last_msg_id#user_id
-    params = query.data.split("#")
-    if len(params) < 5:
-        return await query.answer("Invalid Callback Data", show_alert=True)
-        
-    _, action, chat, lst_msg_id, from_user = params
+    # Handle Cancellation
+    if action == "c":
+        chat_to_cancel = data[2]
+        active_cancellations.add(str(chat_to_cancel))
+        return await query.answer("Stopping... 🛑", show_alert=True)
 
-    if action == 'reject':
+    # Validate data length for Accept/Reject
+    if len(data) < 4:
+        return await query.answer("Invalid request data.")
+
+    chat_id = int(data[2])
+    last_msg_id = int(data[3])
+
+    if action == "r":
         await query.message.delete()
-        await bot.send_message(
-            int(from_user),
-            f'Your submission for indexing {chat} was declined.',
-            reply_to_message_id=int(lst_msg_id)
-        )
-        return
+        return await query.answer("Request Rejected.")
 
+    # Get lock and check if already running
+    lock = get_lock(chat_id)
     if lock.locked():
-        return await query.answer('Another indexing process is running. Wait.', show_alert=True)
+        return await query.answer("This chat is already being indexed!", show_alert=True)
 
-    await query.answer('Starting Indexing...', show_alert=True)
+    await query.answer("Indexing Started...")
     
-    if int(from_user) not in ADMINS:
-        await bot.send_message(int(from_user), "Your request was accepted and indexing has started.")
-
     await query.message.edit(
-        "**Indexing Started...**",
-        reply_markup=InlineKeyboardMarkup(
-            [[InlineKeyboardButton('Cancel', callback_data='index_cancel')]]
-        )
+        f"**Indexing Chat:** `{chat_id}`\n**Status:** Running...",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("Stop Indexing", callback_data=f"i#c#{chat_id}")
+        ]])
     )
-    
-    # Ensure chat is handled as int or str (username)
-    target_chat = int(chat) if chat.strip('-').isnumeric() else chat
-    await index_files_to_db(int(lst_msg_id), target_chat, query.message, bot)
 
+    # Launch actual indexing
+    await index_files_to_db(last_msg_id, chat_id, query.message, bot)
 
-@Client.on_message((filters.forwarded | filters.regex(r"(https://)?(t\.me/|telegram\.me/|telegram\.dog/)(c/)?(\d+|[a-zA-Z_0-9]+)/(\d+)$")) & filters.private)
+@Client.on_message(filters.private & (filters.forwarded | filters.regex(r"t\.me/(c/)?(?P<g>\d+|[a-zA-Z_0-9]+)/(?P<id>\d+)")))
 async def send_for_index(bot, message):
-    if message.text:
-        regex = r"(https://)?(t\.me/|telegram\.me/|telegram\.dog/)(c/)?(\d+|[a-zA-Z_0-9]+)/(\d+)$"
-        match = re.search(regex, message.text)
-        if not match:
-            return
-        chat_id = match.group(4)
-        last_msg_id = int(match.group(5))
-        if chat_id.isnumeric():
-            chat_id = int("-100" + chat_id)
-    elif message.forward_from_chat and message.forward_from_chat.type == enums.ChatType.CHANNEL:
-        last_msg_id = message.forward_from_message_id
+    if message.matches:
+        match = message.matches[0]
+        chat_id = match.group("g")
+        last_msg_id = int(match.group("id"))
+        if chat_id.isnumeric(): chat_id = int("-100" + chat_id)
+    elif message.forward_from_chat:
         chat_id = message.forward_from_chat.id
+        last_msg_id = message.forward_from_message_id
     else:
         return
 
-    # Verify Bot Permissions
     try:
-        await bot.get_chat(chat_id)
+        chat_info = await bot.get_chat(chat_id)
+        chat_id = chat_info.id
     except Exception as e:
-        return await message.reply(f"Error: {e}. Make sure I am an admin in that chat.")
+        return await message.reply(f"❌ Error: {e}")
 
-    buttons = [
-        [InlineKeyboardButton('Accept Index', callback_data=f'index#accept#{chat_id}#{last_msg_id}#{message.from_user.id}')],
-        [InlineKeyboardButton('Reject Index', callback_data=f'index#reject#{chat_id}#{message.id}#{message.from_user.id}')]
-    ]
-    
+    # Callback data kept short to avoid Pyrogram 64-byte limit
+    btns = [[
+        InlineKeyboardButton("✅ Accept", callback_data=f"i#a#{chat_id}#{last_msg_id}"),
+        InlineKeyboardButton("❌ Reject", callback_data=f"i#r#{chat_id}#{last_msg_id}")
+    ]]
+
     if message.from_user.id in ADMINS:
-        await message.reply(f"Index this chat?\nID: `{chat_id}`", reply_markup=InlineKeyboardMarkup(buttons))
+        await message.reply(f"**Admin Tool**\nChat: `{chat_info.title}`\nID: `{chat_id}`", reply_markup=InlineKeyboardMarkup(btns))
     else:
-        await bot.send_message(LOG_CHANNEL, f"New Index Request from {message.from_user.mention}", reply_markup=InlineKeyboardMarkup(buttons))
-        await message.reply("Request sent to moderators.")
-
+        await bot.send_message(LOG_CHANNEL, f"**Request**\nFrom: {message.from_user.mention}\nChat: `{chat_info.title}`", reply_markup=InlineKeyboardMarkup(btns))
+        await message.reply("✅ Request sent for approval.")
 
 async def index_files_to_db(lst_msg_id, chat, msg, bot):
-    total_files = 0
-    duplicate = 0
-    errors = 0
+    total = 0
+    scanned = 0
+    chat_str = str(chat)
     
-    async with lock:
+    if chat_str in active_cancellations:
+        active_cancellations.remove(chat_str)
+
+    async with get_lock(chat):
         try:
-            index_status.CANCEL = False
-            # Pyrogram uses get_chat_history, NOT iter_messages
-            # We fetch 'lst_msg_id' number of messages starting from the most recent
-            async for message in bot.get_chat_history(chat, limit=lst_msg_id):
-                if index_status.CANCEL:
-                    break
+            # Iterating through history from last_msg_id downwards
+            async for message in bot.get_chat_history(chat, offset_id=lst_msg_id + 1):
+                if chat_str in active_cancellations:
+                    active_cancellations.remove(chat_str)
+                    await msg.edit(f"🛑 **Cancelled!**\nSaved: `{total}`")
+                    return
 
-                if not message.media or message.media not in [
-                    enums.MessageMediaType.VIDEO, 
-                    enums.MessageMediaType.DOCUMENT, 
-                    enums.MessageMediaType.AUDIO
-                ]:
-                    continue
-
-                media = getattr(message, message.media.value, None)
-                if not media:
-                    continue
-                
-                # Metadata injection for your DB save_file function
-                media.file_type = message.media.value
-                media.caption = message.caption
-                
-                # CRITICAL: Ensure save_file is an ASYNC function in your DB file
-                success, status = await save_file(media)
-                
-                if success:
-                    total_files += 1
-                elif status == 0:
-                    duplicate += 1
-                elif status == 2:
-                    errors += 1
-
-                # Update UI every 50 files to avoid FloodWait
-                if total_files % 50 == 0:
+                scanned += 1
+                if scanned % 20 == 0:
                     try:
-                        await msg.edit_text(f"Indexing... \nSaved: `{total_files}`\nDuplicates: `{duplicate}`")
-                        await asyncio.sleep(1) 
-                    except FloodWait as e:
-                        await asyncio.sleep(e.value)
-                    except:
-                        pass
+                        await msg.edit_text(
+                            f"**Indexing...**\n\nScanned: `{scanned}`\nSaved: `{total}`",
+                            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Stop", callback_data=f"i#c#{chat}") ]])
+                        )
+                    except: pass
 
+                if message.media:
+                    # Filter for specific media types
+                    m_type = message.media.name.lower()
+                    if m_type in ['video', 'document', 'audio']:
+                        media = getattr(message, m_type, None)
+                        if media:
+                            media.file_type = m_type
+                            media.caption = message.caption or ""
+                            success, _ = await save_file(media)
+                            if success: total += 1
+                
+                await asyncio.sleep(0.05) # Yield to event loop
+
+        except FloodWait as e:
+            await asyncio.sleep(e.value)
         except Exception as e:
-            logger.exception(e)
-            await msg.edit(f"Fatal Error: {e}")
-        finally:
-            final_text = "Indexing Complete!" if not index_status.CANCEL else "Indexing Cancelled!"
-            await msg.edit(f"{final_text}\n\nTotal Saved: `{total_files}`\nDuplicates: `{duplicate}`\nErrors: `{errors}`")
+            logger.error(f"Indexing Error: {e}")
+            await msg.edit(f"❌ Error: {e}")
+            return
 
-@Client.on_message(filters.command('setskip') & filters.user(ADMINS))
-async def set_skip_number(bot, message):
-    try:
-        _, skip = message.text.split(" ")
-        index_status.CURRENT = int(skip)
-        await message.reply(f"Skip set to {skip}")
-    except:
-        await message.reply("Usage: /setskip 100")
+        await msg.edit(f"✅ **Finished!**\n\nTotal Files: `{total}`\nTotal Scanned: `{scanned}`")

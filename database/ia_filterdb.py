@@ -1,17 +1,13 @@
 import logging
-from struct import pack
 import re
-import base64
 from pyrogram.file_id import FileId
 from pymongo.errors import DuplicateKeyError
 from umongo import Instance, Document, fields
 from motor.motor_asyncio import AsyncIOMotorClient
 from marshmallow.exceptions import ValidationError
-from info import DATABASE_URI, DATABASE_NAME, COLLECTION_NAME, USE_CAPTION_FILTER
+from info import DATABASE_URI, DATABASE_NAME, COLLECTION_NAME
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-
 
 client = AsyncIOMotorClient(DATABASE_URI)
 db = client[DATABASE_NAME]
@@ -31,13 +27,21 @@ class Media(Document):
         indexes = ('$file_name', )
         collection_name = COLLECTION_NAME
 
+def unpack_new_file_id(file_id):
+    """Helper to extract persistent ID and reference"""
+    try:
+        decoded = FileId.decode(file_id)
+        return decoded.persistent_id, decoded.file_reference
+    except Exception:
+        return file_id, None
 
 async def save_file(media):
-    """Save file in database"""
-
-    # TODO: Find better way to get same file_id for same media to avoid duplicates
+    """Save file in database with clean filename"""
     file_id, file_ref = unpack_new_file_id(media.file_id)
+    
+    # Regex cleaning: replaces symbols with spaces
     file_name = re.sub(r"(_|\-|\.|\+)", " ", str(media.file_name))
+    
     try:
         file = Media(
             file_id=file_id,
@@ -46,23 +50,17 @@ async def save_file(media):
             file_size=media.file_size,
             file_type=media.file_type,
             mime_type=media.mime_type,
-            caption=media.caption.html if media.caption else None,
+            caption=media.caption if hasattr(media, 'caption') else None,
         )
     except ValidationError:
-        logger.exception('Error occurred while saving file in database')
+        logger.exception('Validation Error while saving')
         return False, 2
-    else:
-        try:
-            await file.commit()
-        except DuplicateKeyError:      
-            logger.warning(
-                f'{getattr(media, "file_name", "NO_FILE")} is already saved in database'
-            )
 
-            return False, 0
-        else:
-            logger.info(f'{getattr(media, "file_name", "NO_FILE")} is saved to database')
-            return True, 1
+    try:
+        await file.commit()
+        return True, 1
+    except DuplicateKeyError:      
+        return False, 0
 
 
 

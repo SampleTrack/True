@@ -18,20 +18,28 @@ lock = asyncio.Lock()
 async def index_files(bot, query):
     if query.data.startswith('index_cancel'):
         temp.CANCEL = True
-        return await query.answer("Cancelling Indexing")
-    _, raju, chat, lst_msg_id, from_user = query.data.split("#")
+        return await query.answer("Cancelling Indexing...")
+    
+    # FIX: Wrap in try-except to catch data format errors
+    try:
+        data_parts = query.data.split("#")
+        if len(data_parts) < 5:
+            return await query.answer("Invalid Callback Data. Re-index the channel.", show_alert=True)
+            
+        _, raju, chat, lst_msg_id, from_user = data_parts
+    except ValueError:
+        return await query.answer("Data error. Please try the command again.", show_alert=True)
+    
     if raju == 'reject':
         await query.message.delete()
-        await bot.send_message(int(from_user),
-                               f'Your Submission for indexing {chat} has been decliened by our moderators.',
-                               reply_to_message_id=int(lst_msg_id))
+        await bot.send_message(int(from_user), 'Your Submission has been declined.')
         return
 
     if lock.locked():
-        return await query.answer('Wait until previous process complete.', show_alert=True)
-    msg = query.message
+        return await query.answer('Another indexing process is already running!', show_alert=True)
 
     await query.answer('Processing...⏳', show_alert=True)
+    # ... rest of your code
     if int(from_user) not in ADMINS:
         await bot.send_message(int(from_user),
                                f'Your Submission for indexing {chat} has been accepted by our moderators and will be added soon.',

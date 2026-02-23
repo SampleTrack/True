@@ -21,12 +21,7 @@ async def index_files(bot, query):
         temp.CANCEL = True
         return await query.answer("Cancelling Indexing...")
     
-    # Logic Fix: Use a check to prevent unpacking errors
-    data_parts = query.data.split("#")
-    if len(data_parts) < 5:
-        return await query.answer("Invalid Indexing Data. Try sending the request again.", show_alert=True)
-        
-    _, raju, chat, lst_msg_id, from_user = data_parts
+    _, raju, chat, lst_msg_id, from_user = query.data.split("#")
     
     if raju == 'reject':
         await query.message.delete()
@@ -34,10 +29,9 @@ async def index_files(bot, query):
         return
 
     if lock.locked():
-        return await query.answer('Another indexing process is currently running.', show_alert=True)
+        return await query.answer('Wait until previous process completes.', show_alert=True)
 
-    await query.answer('Starting Indexing...⏳', show_alert=True)
-    # ... rest of the existing code
+    await query.answer('Processing...⏳', show_alert=True)
     
     msg = query.message
     await msg.edit(
@@ -52,7 +46,7 @@ async def index_files(bot, query):
     except Exception as e:
         logger.exception(e)
         await msg.edit(f"Error: {e}")
-
+        
 async def index_files_to_db(lst_msg_id, chat, msg, bot):
     total_files = 0
     duplicate = 0

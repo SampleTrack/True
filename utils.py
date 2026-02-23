@@ -42,11 +42,10 @@ class temp(object):
     BANNED_USERS = []
     BANNED_CHATS = []
     ME = None
-    CURRENT = 0  # Ensure this starts at 0 or the message ID you want to skip
+    CURRENT = 0  # Ensure this is initialized to 0
     CANCEL = False
     U_NAME = None
     B_NAME = None
-    
     MELCOW = {}
     USERS_CANCEL = False
     GROUPS_CANCEL = False 

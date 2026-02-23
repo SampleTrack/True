@@ -21,15 +21,12 @@ async def index_files(bot, query):
         temp.CANCEL = True
         return await query.answer("Cancelling Indexing...")
     
-    # FIX: Wrap in try-except to catch data format errors
-    try:
-        data_parts = query.data.split("#")
-        if len(data_parts) < 5:
-            return await query.answer("Invalid Callback Data. Re-index the channel.", show_alert=True)
-            
-        _, raju, chat, lst_msg_id, from_user = data_parts
-    except ValueError:
-        return await query.answer("Data error. Please try the command again.", show_alert=True)
+    # Logic Fix: Use a check to prevent unpacking errors
+    data_parts = query.data.split("#")
+    if len(data_parts) < 5:
+        return await query.answer("Invalid Indexing Data. Try sending the request again.", show_alert=True)
+        
+    _, raju, chat, lst_msg_id, from_user = data_parts
     
     if raju == 'reject':
         await query.message.delete()
@@ -37,10 +34,10 @@ async def index_files(bot, query):
         return
 
     if lock.locked():
-        return await query.answer('Another indexing process is already running!', show_alert=True)
+        return await query.answer('Another indexing process is currently running.', show_alert=True)
 
-    await query.answer('Processing...⏳', show_alert=True)
-    # ... rest of your code
+    await query.answer('Starting Indexing...⏳', show_alert=True)
+    # ... rest of the existing code
     
     msg = query.message
     await msg.edit(

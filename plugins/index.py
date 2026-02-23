@@ -39,7 +39,8 @@ async def index_files(bot, query):
     if lock.locked():
         return await query.answer('Another indexing process is already running!', show_alert=True)
 
-    await query.answer('Processing...⏳', show_alert=True
+    await query.answer('Processing...⏳', show_alert=True)
+    # ... rest of your code
     
     msg = query.message
     await msg.edit(

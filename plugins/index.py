@@ -1,160 +1,140 @@
-import logging
-import asyncio
-import time
-import re
-from datetime import timedelta
+import logging, re, asyncio
 from pyrogram import Client, filters, enums
-from pyrogram.errors import FloodWait, ChannelInvalid, ChatAdminRequired, UsernameInvalid, UsernameNotModified
+from pyrogram.errors import FloodWait
+from pyrogram.errors.exceptions.bad_request_400 import ChannelInvalid, ChatAdminRequired, UsernameInvalid, UsernameNotModified
+from info import CHANNELS, LOG_CHANNEL, ADMINS
+from database.ia_filterdb import save_file
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from pyrogram.file_id import FileId
-
-from info import ADMINS, INDEX_REQ_CHANNEL as LOG_CHANNEL
-from database.ia_filterdb import Media, save_file # Importing Media collection directly for batching
 from utils import temp
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 lock = asyncio.Lock()
+
+
+@Client.on_message(filters.chat(CHANNELS) & (filters.document | filters.video | filters.audio))         
+async def media(bot, message):
+    for file_type in ("document", "video", "audio"):
+        media = getattr(message, file_type, None)
+        if media is not None: break
+    else: return
+    media.file_type = file_type
+    media.caption = message.caption
+    await save_file(media)
+
+
 
 @Client.on_callback_query(filters.regex(r'^index'))
 async def index_files(bot, query):
     if query.data.startswith('index_cancel'):
         temp.CANCEL = True
-        return await query.answer("Cancelling Indexing...")
-    
-    _, raju, chat, lst_msg_id, from_user = query.data.split("#")
-    
-    if raju == 'reject':
-        await query.message.delete()
-        await bot.send_message(int(from_user), 'Your Submission has been declined.')
-        return
-
-    if lock.locked():
-        return await query.answer('Wait until previous process completes.', show_alert=True)
-
-    await query.answer('Processing...⏳', show_alert=True)
-    
-    msg = query.message
-    await msg.edit(
-        "<b>Checking for Resume State...</b>",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('Cancel', callback_data='index_cancel')]])
-    )
-
-    try:
-        chat_id = int(chat) if chat.strip("-").isnumeric() else chat
-        # Start the engine
-        await index_files_to_db(int(lst_msg_id), chat_id, msg, bot)
-    except Exception as e:
-        logger.exception(e)
-        await msg.edit(f"Error: {e}")
+        return await query.answer("Cᴀɴᴄᴇʟʟɪɴɢ Iɴᴅᴇxɪɴɢ", show_alert=True)
         
+    perfx, chat, lst_msg_id = query.data.split("#")
+    if lock.locked():
+        return await query.answer('Wᴀɪᴛ Uɴᴛɪʟ Pʀᴇᴠɪᴏᴜs Pʀᴏᴄᴇss Cᴏᴍᴘʟᴇᴛᴇ', show_alert=True)
+    msg = query.message
+    button = InlineKeyboardMarkup([[
+        InlineKeyboardButton('🚫 ᴄᴀɴᴄᴇʟʟ', "index_cancel")
+    ]])
+    await msg.edit("ɪɴᴅᴇxɪɴɢ ɪs sᴛᴀʀᴛᴇᴅ ✨", reply_markup=button)                        
+    try: chat = int(chat)
+    except: chat = chat
+    await index_files_to_db(int(lst_msg_id), chat, msg, bot)
+
+
+@Client.on_message((filters.forwarded | (filters.regex("(https://)?(t\.me/|telegram\.me/|telegram\.dog/)(c/)?(\d+|[a-zA-Z_0-9]+)/(\d+)$")) & filters.text ) & filters.private & filters.incoming & filters.user(ADMINS))
+async def send_for_index(bot, message):
+    if message.text:
+        regex = re.compile("(https://)?(t\.me/|telegram\.me/|telegram\.dog/)(c/)?(\d+|[a-zA-Z_0-9]+)/(\d+)$")
+        match = regex.match(message.text)
+        if not match: return await message.reply('Invalid link')
+        chat_id = match.group(4)
+        last_msg_id = int(match.group(5))
+        if chat_id.isnumeric(): chat_id  = int(("-100" + chat_id))
+    elif message.forward_from_chat.type == enums.ChatType.CHANNEL:
+        last_msg_id = message.forward_from_message_id
+        chat_id = message.forward_from_chat.username or message.forward_from_chat.id
+    else: return
+    try: await bot.get_chat(chat_id)
+    except ChannelInvalid: return await message.reply('This may be a private channel / group. Make me an admin over there to index the files.')
+    except (UsernameInvalid, UsernameNotModified): return await message.reply('Invalid Link specified.')
+    except Exception as e: return await message.reply(f'Errors - {e}')
+    try: k = await bot.get_messages(chat_id, last_msg_id)
+    except: return await message.reply('Make Sure That Iam An Admin In The Channel, if channel is private')
+    if k.empty: return await message.reply('This may be group and iam not a admin of the group.')
+    buttons = InlineKeyboardMarkup([[
+        InlineKeyboardButton('✨ ʏᴇꜱ', callback_data=f'index#{chat_id}#{last_msg_id}')
+        ],[
+        InlineKeyboardButton('🚫 ᴄʟᴏꜱᴇ', callback_data='close_data')
+    ]])               
+    await message.reply(f'Do You Want To Index This Channel/ Group ?\n\nChat ID/ Username: <code>{chat_id}</code>\nLast Message ID: <code>{last_msg_id}</code>', reply_markup=buttons)
+    
+
+@Client.on_message(filters.command('setskip') & filters.user(ADMINS))
+async def set_skip_number(bot, message):
+    if len(message.command) == 2:
+        try: skip = int(message.text.split(" ", 1)[1])
+        except: return await message.reply("Skip Number Should Be An Integer.")
+        await message.reply(f"Successfully Set Skip Number As {skip}")
+        temp.CURRENT = int(skip)
+    else:
+        await message.reply("Give Me A Skip Number")
+
+
 async def index_files_to_db(lst_msg_id, chat, msg, bot):
     total_files = 0
     duplicate = 0
     errors = 0
-    current = 0
-    batch = []
-    start_time = time.time()
-    
-    # 1. Persistent Resume State: Check if we have a skip point in temp or DB
-    # We use temp.CURRENT as the offset_id for pyrogram's iterator
-    skip_id = temp.CURRENT 
-
+    deleted = 0
+    no_media = 0
+    unsupported = 0
     async with lock:
         try:
+            current = temp.CURRENT
             temp.CANCEL = False
-            
-            # Using reverse=True and offset_id allows us to resume from the last saved message
-            async for message in bot.iter_messages(chat, offset_id=skip_id, reverse=True):
+            async for message in bot.iter_messages(chat, lst_msg_id, temp.CURRENT):
                 if temp.CANCEL:
+                    await msg.edit(f"Successfully Cancelled!!\n\nSaved <code>{total_files}</code> files to dataBase!\nDuplicate Files Skipped: <code>{duplicate}</code>\nDeleted Messages Skipped: <code>{deleted}</code>\nNon-Media messages skipped: <code>{no_media + unsupported}</code>(Unsupported Media - `{unsupported}` )\nErrors Occurred: <code>{errors}</code>")
                     break
-
                 current += 1
-                
-                # Basic Filtering
-                if message.empty or not message.media:
-                    continue
-                if message.media not in [enums.MessageMediaType.VIDEO, enums.MessageMediaType.AUDIO, enums.MessageMediaType.DOCUMENT]:
-                    continue
-
-                # 2. Strict Error Handling for File Decoding
-                try:
-                    media_type = message.media.value
-                    media = getattr(message, media_type, None)
-                    if not media:
-                        continue
-
-                    # 3. Optimized Duplicate Check & Smart Filtering
-                    # Check if file_unique_id exists in DB before doing heavy processing
-                    # This prevents RAM spikes by not loading duplicates into the batch list
-                    exists = await Media.find_one({'file_unique_id': media.file_unique_id})
-                    if exists:
-                        duplicate += 1
-                        continue
-
-                    # Prepare for Batching
-                    data = {
-                        'file_name': getattr(media, 'file_name', 'None'),
-                        'file_size': media.file_size,
-                        'file_id': media.file_id,
-                        'file_unique_id': media.file_unique_id,
-                        'file_type': media_type,
-                        'caption': message.caption or "",
-                    }
-                    batch.append(data)
-
-                except Exception:
-                    errors += 1
-                    continue
-
-                # 4. Batch Commits (Massive Speed Gain)
-                if len(batch) >= 40:
+                if current % 100 == 0:
+                    can = [[InlineKeyboardButton('Cancel', callback_data='index_cancel')]]
+                    reply = InlineKeyboardMarkup(can)
                     try:
-                        # insert_many is significantly faster than calling save_file 40 times
-                        await Media.insert_many(batch, ordered=False)
-                        total_files += len(batch)
-                    except Exception as e:
-                        # Handle cases where some might still be duplicates
-                        errors += 1
-                    
-                    batch.clear()
-                    
-                    # Update Resume State
-                    temp.CURRENT = message.id 
-                    
-                    # 5. Enhanced UI with ETA
-                    elapsed = time.time() - start_time
-                    files_per_sec = total_files / elapsed if elapsed > 0 else 0
-                    remaining_msg = lst_msg_id - message.id
-                    eta_sec = remaining_msg / files_per_sec if files_per_sec > 0 else 0
-                    eta_str = str(timedelta(seconds=int(eta_sec)))
-
-                    await msg.edit_text(
-                        text=(f"<b>Indexing...</b>\n\n"
-                              f"📂 Saved: <code>{total_files}</code>\n"
-                              f"🔄 Duplicates: <code>{duplicate}</code>\n"
-                              f"⏳ ETA: <code>{eta_str}</code>\n"
-                              f"🚀 Last Msg ID: <code>{message.id}</code>"),
-                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('Cancel', callback_data='index_cancel')]])
-                    )
-
-            # Final flush for remaining files
-            if batch:
-                await Media.insert_many(batch, ordered=False)
-                total_files += len(batch)
-
-        except FloodWait as e:
-            await asyncio.sleep(e.value)
+                        await msg.edit_text(text=f"Total Messages Fetched: <code>{current}</code>\nTotal Messages Saved: <code>{total_files}</code>\nDuplicate Files Skipped: <code>{duplicate}</code>\nDeleted Messages Skipped: <code>{deleted}</code>\nNon-Media messages skipped: <code>{no_media + unsupported}</code>(Unsupported Media - `{unsupported}` )\nErrors Occurred: <code>{errors}</code>", reply_markup=reply)       
+                    except FloodWait as t:
+                        await asyncio.sleep(t.value)
+                        await msg.edit_text(text=f"Total Messages Fetched: <code>{current}</code>\nTotal Messages Saved: <code>{total_files}</code>\nDuplicate Files Skipped: <code>{duplicate}</code>\nDeleted Messages Skipped: <code>{deleted}</code>\nNon-Media messages skipped: <code>{no_media + unsupported}</code>(Unsupported Media - `{unsupported}` )\nErrors Occurred: <code>{errors}</code>", reply_markup=reply)                          
+                if message.empty:
+                    deleted += 1
+                    continue
+                elif not message.media:
+                    no_media += 1
+                    continue
+                elif message.media not in [enums.MessageMediaType.VIDEO, enums.MessageMediaType.AUDIO, enums.MessageMediaType.DOCUMENT]:
+                    unsupported += 1
+                    continue
+                media = getattr(message, message.media.value, None)
+                if not media:
+                    unsupported += 1
+                    continue
+                media.file_type = message.media.value
+                media.caption = message.caption
+                aynav, vnay = await save_file(media)
+                if aynav:
+                    total_files += 1
+                elif vnay == 0:
+                    duplicate += 1
+                elif vnay == 2:
+                    errors += 1       
         except Exception as e:
             logger.exception(e)
-            await msg.edit(f"Critical Loop Error: {e}")
-        finally:
-            status = "Cancelled" if temp.CANCEL else "Completed"
-            await msg.edit(
-                f"<b>Indexing {status}!</b>\n\n"
-                f"Total Saved: <code>{total_files}</code>\n"
-                f"Duplicates Skipped: <code>{duplicate}</code>\n"
-                f"Errors: <code>{errors}</code>"
-            )
-            # Reset skip point on completion
-            if not temp.CANCEL:
-                temp.CURRENT = 0
+            await msg.edit(f'Error: {e}')
+        else:
+            await msg.edit(f'Succesfully Saved <code>{total_files}</code> To Database!\nDuplicate Files Skipped: <code>{duplicate}</code>\nDeleted Messages Skipped: <code>{deleted}</code>\nNon-Media Messages Skipped: <code>{no_media + unsupported}</code>(Unsupported Media - `{unsupported}` )\nErrors Occurred: <code>{errors}</code>')
+
+
+
+
+

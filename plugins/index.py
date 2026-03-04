@@ -89,52 +89,53 @@ async def index_files_to_db(lst_msg_id, chat, msg, bot):
     deleted = 0
     no_media = 0
     unsupported = 0
+    
     async with lock:
         try:
-            current = temp.CURRENT
+            current = 0
             temp.CANCEL = False
-            async for message in bot.iter_messages(chat, lst_msg_id, temp.CURRENT):
+            # Pyrogram uses get_chat_history to fetch previous messages
+            async for message in bot.get_chat_history(chat_id=chat, limit=lst_msg_id, offset_id=0):
                 if temp.CANCEL:
-                    await msg.edit(f"Successfully Cancelled!!\n\nSaved <code>{total_files}</code> files to dataBase!\nDuplicate Files Skipped: <code>{duplicate}</code>\nDeleted Messages Skipped: <code>{deleted}</code>\nNon-Media messages skipped: <code>{no_media + unsupported}</code>(Unsupported Media - `{unsupported}` )\nErrors Occurred: <code>{errors}</code>")
+                    await msg.edit(f"Cancelled! Saved {total_files} files.")
                     break
+
                 current += 1
+                
+                # Progress Update Logic
                 if current % 100 == 0:
-                    can = [[InlineKeyboardButton('Cancel', callback_data='index_cancel')]]
-                    reply = InlineKeyboardMarkup(can)
                     try:
-                        await msg.edit_text(text=f"Total Messages Fetched: <code>{current}</code>\nTotal Messages Saved: <code>{total_files}</code>\nDuplicate Files Skipped: <code>{duplicate}</code>\nDeleted Messages Skipped: <code>{deleted}</code>\nNon-Media messages skipped: <code>{no_media + unsupported}</code>(Unsupported Media - `{unsupported}` )\nErrors Occurred: <code>{errors}</code>", reply_markup=reply)       
+                        await msg.edit_text(text=f"Fetched: {current}\nSaved: {total_files}")
                     except FloodWait as t:
                         await asyncio.sleep(t.value)
-                        await msg.edit_text(text=f"Total Messages Fetched: <code>{current}</code>\nTotal Messages Saved: <code>{total_files}</code>\nDuplicate Files Skipped: <code>{duplicate}</code>\nDeleted Messages Skipped: <code>{deleted}</code>\nNon-Media messages skipped: <code>{no_media + unsupported}</code>(Unsupported Media - `{unsupported}` )\nErrors Occurred: <code>{errors}</code>", reply_markup=reply)                          
-                if message.empty:
+
+                if not message or message.empty:
                     deleted += 1
                     continue
-                elif not message.media:
+
+                # Identify Media Type properly
+                media_type = message.media
+                if not media_type or media_type not in [enums.MessageMediaType.VIDEO, enums.MessageMediaType.AUDIO, enums.MessageMediaType.DOCUMENT]:
                     no_media += 1
                     continue
-                elif message.media not in [enums.MessageMediaType.VIDEO, enums.MessageMediaType.AUDIO, enums.MessageMediaType.DOCUMENT]:
-                    unsupported += 1
-                    continue
-                media = getattr(message, message.media.value, None)
+
+                # Get the actual file object (document, video, or audio)
+                media = getattr(message, media_type.value, None)
                 if not media:
                     unsupported += 1
                     continue
-                media.file_type = message.media.value
+
+                media.file_type = media_type.value
                 media.caption = message.caption
+                
+                # Database Save
                 aynav, vnay = await save_file(media)
                 if aynav:
                     total_files += 1
                 elif vnay == 0:
                     duplicate += 1
                 elif vnay == 2:
-                    errors += 1       
+                    errors += 1
         except Exception as e:
             logger.exception(e)
             await msg.edit(f'Error: {e}')
-        else:
-            await msg.edit(f'Succesfully Saved <code>{total_files}</code> To Database!\nDuplicate Files Skipped: <code>{duplicate}</code>\nDeleted Messages Skipped: <code>{deleted}</code>\nNon-Media Messages Skipped: <code>{no_media + unsupported}</code>(Unsupported Media - `{unsupported}` )\nErrors Occurred: <code>{errors}</code>')
-
-
-
-
-

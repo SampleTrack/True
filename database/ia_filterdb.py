@@ -33,36 +33,38 @@ class Media(Document):
 
 
 async def save_file(media):
-    """Save file in database"""
+    """Save file in database with duplicate prevention"""
+    
+    # Clean the filename: replace symbols with spaces and strip extra whitespace
+    file_name = re.sub(r"(_|\-|\.|\+)", " ", str(getattr(media, 'file_name', 'Unknown')))
+    file_name = " ".join(file_name.split()) 
 
-    # TODO: Find better way to get same file_id for same media to avoid duplicates
-    file_id, file_ref = unpack_new_file_id(media.file_id)
-    file_name = re.sub(r"(_|\-|\.|\+)", " ", str(media.file_name))
     try:
         file = Media(
-            file_id=file_id,
-            file_ref=file_ref,
+            file_id=media.file_id,
+            file_unique_id=media.file_unique_id, # This is the "better way" you were looking for
             file_name=file_name,
             file_size=media.file_size,
             file_type=media.file_type,
-            mime_type=media.mime_type,
+            mime_type=getattr(media, 'mime_type', None),
             caption=media.caption.html if media.caption else None,
         )
-    except ValidationError:
-        logger.exception('Error occurred while saving file in database')
+    except ValidationError as e:
+        logger.error(f'Validation failed for {file_name}: {e}')
         return False, 2
-    else:
-        try:
-            await file.commit()
-        except DuplicateKeyError:      
-            logger.warning(
-                f'{getattr(media, "file_name", "NO_FILE")} is already saved in database'
-            )
 
-            return False, 0
-        else:
-            logger.info(f'{getattr(media, "file_name", "NO_FILE")} is saved to database')
-            return True, 1
+    try:
+        await file.commit()
+        logger.info(f'{file_name} saved successfully.')
+        return True, 1
+    except DuplicateKeyError:
+        # This will now actually trigger because of the 'unique=True' flag in the model
+        logger.warning(f'{file_name} already exists in database.')
+        return False, 0
+    except Exception as e:
+        logger.error(f'Unexpected error saving {file_name}: {e}')
+        return False, 2
+
 
 
 

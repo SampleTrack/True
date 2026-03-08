@@ -101,28 +101,14 @@ class Database:
         return None
 
     async def update_verification(self, id, date, time):
-        status = {
-            'date': str(date),
-            'time': str(time)
-        }
-        user = await self.col.find_one({'id':int(id)})
-        if not user:
-            await self.col2.update_one({'id': int(id)}, {'$set': {'verification_status': status}})
-        else:
-            await self.col.update_one({'id': int(id)}, {'$set': {'verification_status': status}})
-
+        status = {'date': str(date), 'time': str(time)}
+        await self.col.update_one({'id': int(id)}, {'$set': {'verification_status': status}}, upsert=True)
+    
     async def get_verified(self, id):
-        default = {
-            'date': "1999-12-31",
-            'time': "23:59:59"
-        }
+        default = {'date': "1999-12-31", 'time': "23:59:59"}
         user = await self.col.find_one({'id': int(id)})
         if user:
             return user.get("verification_status", default)
-        else:
-            user = await self.col2.find_one({'id': int(id)})
-            if user:
-                return user.get("verification_status", default)
         return default
         
     async def add_user(self, id, name):

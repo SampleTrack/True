@@ -68,9 +68,12 @@ async def start(client, message):
             parse_mode=enums.ParseMode.HTML
         )
         return
+    # Update the start function in plugins/commands.py
     if AUTH_CHANNEL and not await is_subscribed(client, message):
         try:
-            invite_link = await client.create_chat_invite_link(int(AUTH_CHANNEL))
+            # Check if it's already an int or a string representing an int
+            channel_id = int(AUTH_CHANNEL) if str(AUTH_CHANNEL).replace("-", "").isdigit() else AUTH_CHANNEL
+            invite_link = await client.create_chat_invite_link(channel_id)
         except ChatAdminRequired:
             logger.error("MAKE SURE BOT IS ADMIN IN FORCESUB CHANNEL")
             return

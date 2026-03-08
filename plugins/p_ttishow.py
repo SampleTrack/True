@@ -8,7 +8,7 @@ from utils import get_size, temp, get_settings, update_verify_status, save_group
 from Script import script
 import time
 import datetime
-from pyrogram.errors import ChatAdminRequired
+from pyrogram.errors import ChatAdminRequired, ChannelPrivate
 import asyncio
 import pytz
 

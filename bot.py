@@ -96,11 +96,9 @@ class Bot(Client):
                     )
                 )
                 await k.pin()
-                # Sleep for 1 minute to avoid sending multiple messages
-                await asyncio.sleep(60)
+                await asyncio.sleep(120) 
             else:
-                # Sleep for 1 minute and check again
-                await asyncio.sleep(60)
+                await asyncio.sleep(30)
                 
     async def stop(self, *args):
         await super().stop()

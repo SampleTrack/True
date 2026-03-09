@@ -1,14 +1,14 @@
 from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from pyrogram.errors.exceptions.bad_request_400 import MessageTooLong, PeerIdInvalid
-from info import ADMINS, LOG_CHANNEL, SUPPORT_CHAT, UPDATE_CHANNEL, MELCOW_NEW_USERS, MELCOW_PIC
+from info import ADMINS, LOG_CHANNEL, SUPPORT_CHAT, UPDATE_CHANNEL, MELCOW_NEW_USERS
 from database.users_chats_db import db
 from database.ia_filterdb import Media
 from utils import get_size, temp, get_settings, update_verify_status, save_group_settings
 from Script import script
 import time
 import datetime
-from pyrogram.errors import ChatAdminRequired, ChannelPrivate
+from pyrogram.errors import ChatAdminRequired
 import asyncio
 import pytz
 
@@ -244,95 +244,6 @@ async def get_ststs(bot, message):
     size = get_size(size)
     free = get_size(free)
     await rju.edit(script.STATUS_TXT.format(files, total_users, totl_chats, size, free))
-
-
-@Client.on_message(filters.command('invite') & filters.user(ADMINS))
-async def gen_invite(bot, message):
-    if len(message.command) == 1:
-        return await message.reply('Give me a chat id')
-    chat = message.command[1]
-    try:
-        chat = int(chat)
-    except:
-        return await message.reply('Give Me A Valid Chat ID')
-    try:
-        link = await bot.create_chat_invite_link(chat)
-    except ChatAdminRequired:
-        return await message.reply("Invite Link Generation Failed, Iam Not Having Sufficient Rights")
-    except Exception as e:
-        return await message.reply(f'Error {e}')
-    await message.reply(f'Here is your Invite Link {link.invite_link}')
-
-@Client.on_message(filters.command("update_user"))
-async def update_user(bot, message):
-    start_time = time.time()
-    userid = message.from_user.id
-    user = await bot.get_users(int(userid))
-    sts = await message.reply_text('Updating user...')
-
-    short_temp = "1"
-    date_temp = "1999-12-31"
-    time_temp = "23:59:59"
-    
-    await update_verify_status(bot, user.id, short_temp, date_temp, time_temp)
-
-    time_taken = datetime.timedelta(seconds=int(time.time() - start_time))
-    await sts.edit(f"User updated with default verification status.\nTime taken: {time_taken}")
-
-
-@Client.on_message(filters.command("updateusers") & filters.user(ADMINS))
-async def update_users_verifications(bot, message):
-    sts = await message.reply_text('Updating users...')
-    total_users = await db.total_users_count()
-    start_time = time.time()
-    count = 0
-    complete = 0
-    
-    users = await db.get_all_users()
-    
-    async for user in users:
-        user_id = user.get("id")
-        short_temp = "1"
-        date_temp = "1999-12-31"
-        time_temp = "23:59:59"
-        await update_verify_status(bot, user_id, short_temp, date_temp, time_temp)
-        
-        count += 1
-        complete += 1
-        
-        if not complete % 20:
-            await sts.edit(f"Total Users: {total_users}\nTotal Complete: {complete}\nTotal Complete Percentage: {complete/total_users*100:.2f}%")
-    
-    time_taken = datetime.timedelta(seconds=int(time.time()-start_time))
-    await sts.edit(f"All users updated with default verification status.\nTime taken: {time_taken}")
-
-@Client.on_message(filters.command('deleteusers') & filters.user(ADMINS))
-async def deleteusers(bot, message):
-    msg = await message.reply('Starting deletion of users...')
-    total_users = await db.total_users_count()
-    start_time = time.time()
-    count = 0
-    complete = 0
-    
-    users = await db.get_all_users()
-    async for user in users:
-        try:
-            print(user)
-            user_id = user['id']  # Update this to match the correct key
-            await db.delete_user(user_id)
-            count += 1
-            complete += 1
-            
-            if not complete % 20:
-                await msg.edit(f"Total Users: {total_users}\nTotal Deleted: {complete}\nTotal Deletion Percentage: {complete / total_users * 100:.2f}%")
-        
-        except KeyError as e:
-            await msg.edit(f"KeyError: {e}. User object: {user}")
-            continue  # Skip this user and continue with the next
-    
-    time_taken = datetime.timedelta(seconds=int(time.time() - start_time))
-    await msg.edit(f"All users deleted.\nTime taken: {time_taken}")
-    
 
 @Client.on_message(filters.command('ban') & filters.user(ADMINS))
 async def ban_a_user(bot, message):

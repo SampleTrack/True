@@ -15,6 +15,8 @@ class script(object):
 - Source -   
 
 <b>DEVS:</b>"""
+    FORCE_SUB_TEXT = """**Please Join My Updates Channel to use this Bot!**","""
+            
     MANUELFILTER_TXT = """Help: <b>Filters</b>
 
 - Filter is the feature were users can set automated replies for a particular keyword and EvaMaria will respond whenever a keyword is found the message

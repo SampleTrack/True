@@ -213,5 +213,17 @@ class Database:
     async def get_db_size(self):
         return (await self.db.command("dbstats"))['dataSize']
 
+    # Add these to database/users_chats_db.py inside the Database class
+    async def set_maintenance(self, status: bool):
+        await self.db.settings.update_one(
+            {'id': 'bot_maintenance'}, 
+            {'$set': {'status': status}}, 
+            upsert=True
+        )
+
+    async def get_maintenance(self) -> bool:
+        doc = await self.db.settings.find_one({'id': 'bot_maintenance'})
+        return doc['status'] if doc else False
+
 
 db = Database(DATABASE_URI, DATABASE_NAME)

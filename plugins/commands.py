@@ -571,3 +571,47 @@ async def save_template(client, message):
     await save_group_settings(grp_id, 'template', template)
     await sts.edit(f"Successfully changed template for {title} to\n\n{template}")
     
+@Client.on_message(filters.command("group_stats") & filters.user(ADMINS))
+async def group_stats_admin(client, message):
+    """Command to check all connected groups and user counts"""
+    sts = await message.reply("Calculating stats...")
+    chats = await db.get_all_chats()
+    out = "📊 **Global Group Analytics**\n\n"
+    total_members = 0
+    count = 0
+
+    async for chat in chats:
+        try:
+            m_count = await client.get_chat_members_count(chat['id'])
+            total_members += m_count
+            count += 1
+            out += f"• **{chat['title']}**\n  ID: `{chat['id']}` | Members: `{m_count}`\n\n"
+        except Exception:
+            continue
+            
+    out += f"**Total Groups:** {count}\n**Total Reach:** {total_members}"
+    await sts.edit(out)
+
+@Client.on_message(filters.command("purge_links") & filters.group)
+async def purge_group_links(client, message):
+    """Master command to delete all existing links in a group (Admin Only)"""
+    # Check permissions
+    user = await client.get_chat_member(message.chat.id, message.from_user.id)
+    if user.status not in [enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER] and message.from_user.id not in ADMINS:
+        return await message.reply("Only Admins can use this master command.")
+
+    sts = await message.reply("🔎 Scanning for links to purge...")
+    purged_count = 0
+    
+    async for msg in client.get_chat_history(message.chat.id, limit=500):
+        if msg.text or msg.caption:
+            content = msg.text or msg.caption
+            if re.search(LINK_PATTERN, content, re.IGNORECASE):
+                try:
+                    await msg.delete()
+                    purged_count += 1
+                except Exception:
+                    continue
+    
+    await sts.edit(f"✅ Purge Complete! Removed `{purged_count}` messages containing links.")
+    

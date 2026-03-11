@@ -607,18 +607,19 @@ async def master_stats(client, message):
 
 @Client.on_message(filters.command("purge_all_links") & filters.user(ADMINS))
 async def purge_all_links(client, message):
-    """
-    Master command to delete all previous links in a specific group.
-    Usage: /purge_all_links -100xxxxxxxxxx
-    """
     if len(message.command) < 2:
-        return await message.reply("Usage: `/purge_all_links <group_id>`")
+        return await message.reply("Usage: `/purge_all_links -100xxxxxxxxxx` or `username`")
     
-    target_chat = message.command[1]
-    query_msg = await message.reply(f"🔎 **Scanning `{target_chat}` for links...**")
+    # Logic: Convert to int if it's a numerical ID, else keep as username string
+    raw_chat = message.command[1]
+    target_chat = int(raw_chat) if raw_chat.startswith("-100") or raw_chat.isdigit() else raw_chat
+    
+    query_msg = await message.reply(f"🔎 **Scanning `{target_chat}`...**")
     deleted_count = 0
 
     try:
+        # Note: Bots can only see history if they are Admin or if 
+        # the message was sent while the bot was present.
         async for msg in client.get_chat_history(target_chat, limit=1000):
             content = msg.text or msg.caption
             if content and re.search(LINK_PATTERN, content, re.IGNORECASE):
@@ -627,7 +628,8 @@ async def purge_all_links(client, message):
                     deleted_count += 1
                 except Exception:
                     continue
-        await query_msg.edit(f"✅ **Cleanup Complete!**\nRemoved `{deleted_count}` link messages from `{target_chat}`.")
-    except Exception as e:
-        await query_msg.edit(f"❌ **Error:** `{str(e)}`")
         
+        await query_msg.edit(f"✅ **Cleanup Complete!**\nRemoved `{deleted_count}` messages.")
+    except Exception as e:
+        # LOGICAL CHECK: If it still fails, the bot isn't an admin or the ID is wrong.
+        await query_msg.edit(f"❌ **Failed:** `{type(e).__name__}: {str(e)}`")

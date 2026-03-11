@@ -20,6 +20,15 @@ import os
 import json
 import base64
 logger = logging.getLogger(__name__)
+from pyrogram import Client, filters, enums
+from info import ADMINS
+from database.users_chats_db import db
+import re
+
+# Standard regex for link detection
+LINK_PATTERN = r"(https?://|t\.me/|telegram\.me/|telegram\.dog/|www\.)\S+"
+
+
 
 BATCH_FILES = {}
 
@@ -571,47 +580,54 @@ async def save_template(client, message):
     await save_group_settings(grp_id, 'template', template)
     await sts.edit(f"Successfully changed template for {title} to\n\n{template}")
     
-@Client.on_message(filters.command("group_stats") & filters.user(ADMINS))
-async def group_stats_admin(client, message):
-    """Command to check all connected groups and user counts"""
-    sts = await message.reply("Calculating stats...")
-    chats = await db.get_all_chats()
-    out = "📊 **Global Group Analytics**\n\n"
-    total_members = 0
-    count = 0
 
-    async for chat in chats:
+@Client.on_message(filters.command("master_stats") & filters.user(ADMINS))
+async def master_stats(client, message):
+    """View all connected groups and member counts."""
+    sts = await message.reply("📊 **Fetching Global Data...**")
+    all_chats = await db.get_all_chats()
+    
+    report = "📑 **Bot Management Report**\n\n"
+    total_groups = 0
+    total_members = 0
+
+    async for chat in all_chats:
         try:
-            m_count = await client.get_chat_members_count(chat['id'])
+            chat_id = chat['id']
+            m_count = await client.get_chat_members_count(chat_id)
             total_members += m_count
-            count += 1
-            out += f"• **{chat['title']}**\n  ID: `{chat['id']}` | Members: `{m_count}`\n\n"
+            total_groups += 1
+            report += f"• **{chat.get('title', 'Unknown')}**\n  ID: `{chat_id}` | 👥 `{m_count}`\n\n"
         except Exception:
             continue
-            
-    out += f"**Total Groups:** {count}\n**Total Reach:** {total_members}"
-    await sts.edit(out)
 
-@Client.on_message(filters.command("purge_links") & filters.group)
-async def purge_group_links(client, message):
-    """Master command to delete all existing links in a group (Admin Only)"""
-    # Check permissions
-    user = await client.get_chat_member(message.chat.id, message.from_user.id)
-    if user.status not in [enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER] and message.from_user.id not in ADMINS:
-        return await message.reply("Only Admins can use this master command.")
+    report += f"**Total Groups:** `{total_groups}`\n"
+    report += f"**Total Reach:** `{total_members}`"
+    await sts.edit(report)
 
-    sts = await message.reply("🔎 Scanning for links to purge...")
-    purged_count = 0
+@Client.on_message(filters.command("purge_all_links") & filters.user(ADMINS))
+async def purge_all_links(client, message):
+    """
+    Master command to delete all previous links in a specific group.
+    Usage: /purge_all_links -100xxxxxxxxxx
+    """
+    if len(message.command) < 2:
+        return await message.reply("Usage: `/purge_all_links <group_id>`")
     
-    async for msg in client.get_chat_history(message.chat.id, limit=500):
-        if msg.text or msg.caption:
+    target_chat = message.command[1]
+    query_msg = await message.reply(f"🔎 **Scanning `{target_chat}` for links...**")
+    deleted_count = 0
+
+    try:
+        async for msg in client.get_chat_history(target_chat, limit=1000):
             content = msg.text or msg.caption
-            if re.search(LINK_PATTERN, content, re.IGNORECASE):
+            if content and re.search(LINK_PATTERN, content, re.IGNORECASE):
                 try:
                     await msg.delete()
-                    purged_count += 1
+                    deleted_count += 1
                 except Exception:
                     continue
-    
-    await sts.edit(f"✅ Purge Complete! Removed `{purged_count}` messages containing links.")
-    
+        await query_msg.edit(f"✅ **Cleanup Complete!**\nRemoved `{deleted_count}` link messages from `{target_chat}`.")
+    except Exception as e:
+        await query_msg.edit(f"❌ **Error:** `{str(e)}`")
+        

@@ -37,7 +37,7 @@ async def link_and_forward_protector(client, message):
             await message.delete()
             # Optional: Warning message that auto-deletes
             warn = await message.reply(f"⚠️ {message.from_user.mention}, links and forwards are not allowed here!")
-            await asyncio.sleep(5)
+            await asyncio.sleep(2)
             await warn.delete()
         except Exception:
             pass

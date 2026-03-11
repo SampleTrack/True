@@ -1,73 +1,47 @@
-# Create/Update a file like plugins/group_moderator.py
-
 import re
+import asyncio
 from pyrogram import Client, filters, enums
-from info import LOG_CHANNEL, ADMINS
+from info import ADMINS, LOG_CHANNEL
+from database.users_chats_db import db
 
-# Configuration
-BANNED_WORDS = ["porn"] # Add your list here
-WARN_LIMIT = 3
-user_warns = {} # In-memory warning tracker (reset on restart)
+# Patterns to detect any form of link or promotion
+LINK_PATTERN = r"(https?://|t\.me/|telegram\.me/|telegram\.dog/|www\.)\S+"
 
-# RegEx Patterns
-PROMO_LINK_PATTERN = r"(https?://|t\.me/|telegram\.me/)\S+"
-PHONE_PATTERN = r"\+?\d{10,12}"
-EMAIL_PATTERN = r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+"
+@Client.on_message(filters.group & ~filters.service, group=-2)
+async def link_and_forward_protector(client, message):
+    # 1. Bypass check: Allow Bot Admins and Group Admins
+    if message.from_user:
+        st = await client.get_chat_member(message.chat.id, message.from_user.id)
+        if st.status in [enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER] or message.from_user.id in ADMINS:
+            return
 
-@Client.on_message(filters.group & ~filters.service)
-async def group_moderator(client, message):
-    if not message.text or (message.from_user and message.from_user.id in ADMINS):
-        return
-
-    text = message.text.lower()
-    content_violation = False
-    reason = ""
-
-    # Check Banned Words
-    if any(word in text for word in BANNED_WORDS):
-        content_violation = True
-        reason = "Banned words/language"
+    # 2. Check for Links in text or caption
+    has_link = False
+    if message.text and re.search(LINK_PATTERN, message.text, re.IGNORECASE):
+        has_link = True
+    elif message.caption and re.search(LINK_PATTERN, message.caption, re.IGNORECASE):
+        has_link = True
     
-    # Check Links, Mobile, and Email
-    elif re.search(PROMO_LINK_PATTERN, text):
-        content_violation = True
-        reason = "Promotion links"
-    elif re.search(PHONE_PATTERN, text):
-        content_violation = True
-        reason = "Mobile number"
-    elif re.search(EMAIL_PATTERN, text):
-        content_violation = True
-        reason = "Email ID"
+    # 3. Check for Links in Inline Buttons (if any)
+    if message.reply_markup:
+        for row in message.reply_markup.inline_keyboard:
+            for btn in row:
+                if btn.url:
+                    has_link = True
 
-    if content_violation:
-        user_id = message.from_user.id
-        chat_id = message.chat.id
-        
-        # Increment Warning
-        user_warns[user_id] = user_warns.get(user_id, 0) + 1
-        current_warns = user_warns[user_id]
+    # 4. Check for Forwarded Content (Strict Restriction)
+    is_forwarded = message.forward_from or message.forward_from_chat
 
-        # Auto Delete
-        await message.delete()
+    if has_link or is_forwarded:
+        try:
+            await message.delete()
+            # Optional: Warning message that auto-deletes
+            warn = await message.reply(f"⚠️ {message.from_user.mention}, links and forwards are not allowed here!")
+            await asyncio.sleep(5)
+            await warn.delete()
+        except Exception:
+            pass
 
-        if current_warns >= WARN_LIMIT:
-            # Ban User
-            await client.ban_chat_member(chat_id, user_id)
-            log_text = (f"🚫 **User Banned**\n\n"
-                        f"**User:** {message.from_user.mention} (`{user_id}`)\n"
-                        f"**Chat:** {message.chat.title}\n"
-                        f"**Reason:** Reached 3 warnings for {reason}")
-            
-            await client.send_message(LOG_CHANNEL, log_text)
-            await client.send_message(chat_id, f"❌ {message.from_user.mention} has been banned for repeated violations.")
-            del user_warns[user_id] # Reset after ban
-        else:
-            # Warn User
-            warn_msg = await message.reply(
-                f"⚠️ {message.from_user.mention}, your message was deleted for {reason}.\n"
-                f"Warning: {current_warns}/{WARN_LIMIT}. 3 strikes = Ban."
-            )
-            # Optional: Delete warning message after 10 seconds
-            await asyncio.sleep(10)
-            await warn_msg.delete()
-          
+
+
+

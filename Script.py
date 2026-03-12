@@ -211,3 +211,5 @@ Yesterday
 🌐 Timezone: <code>Asia/Kolkata</code>
 
 #{c}"""
+    MELCOW_ENG = """𝙷𝙴𝙻𝙻𝙾 {a}, 𝚆𝙴𝙻𝙲𝙾𝙼𝙴 𝚃𝙾 {b}!""" 
+    

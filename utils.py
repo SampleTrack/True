@@ -1,7 +1,6 @@
 import logging
 from pyrogram.errors import InputUserDeactivated, UserNotParticipant, FloodWait, UserIsBlocked, PeerIdInvalid
 from info import AUTH_CHANNEL, LONG_IMDB_DESCRIPTION, MAX_LIST_ELM, LOG_CHANNEL
-from info import *
 from imdb import IMDb
 import asyncio
 import string
@@ -11,7 +10,6 @@ from pyrogram import enums
 from typing import Union
 import random 
 import re
-import os
 import pytz
 from Script import script 
 from datetime import datetime, timedelta, date, time

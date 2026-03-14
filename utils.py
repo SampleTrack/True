@@ -407,16 +407,6 @@ def humanbytes(size):
     return str(round(size, 2)) + " " + Dic_powerN[n] + 'B'
 
 
-async def send_verification_log(bot, userid, short_temp, date_temp, time_temp):
-    user = await bot.get_users(int(userid))
-    url = URLINK[user.id]
-    if short_temp == 4:
-        shortnum = 1
-    else:
-        shortnum = short_temp + 1
-    log_message = f"#VerificationLog:\nUser ID: {user.id}\nUser Name: {user.mention}\nShortNum: {shortnum}\nDate: {date_temp}\nTime: {time_temp}\nUrl: {url}"
-    await bot.send_message(LOG_CHANNEL, log_message)
-
 async def send_verification_log(bot, userid, date_temp, time_temp):
     user = await bot.get_users(int(userid))
     log_message = f"#VerificationLog:\nUser ID: {user.id}\nUser Name: {user.mention}\nDate: {date_temp}\nTime: {time_temp}"

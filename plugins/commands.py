@@ -438,41 +438,34 @@ async def delete(bot, message):
                 await msg.edit('File not found in database')
 
 
-
 @Client.on_message(filters.command('deleteall') & filters.user(ADMINS))
 async def delete_all_index(bot, message):
     await message.reply_text(
-        '⚠️ **WARNING: TOTAL DATABASE WIPE**\nThis will instantly eradicate all indexed files. This action is irreversible.\n\nProceed?',
+        'Tʜɪs ᴡɪʟʟ ᴅᴇʟᴇᴛᴇ ᴀʟʟ ɪɴᴅᴇxᴇᴅ ғɪʟᴇs.\nDᴏ ʏᴏᴜ ᴡᴀɴᴛ ᴛᴏ ᴄᴏɴᴛɪɴᴜᴇ ?',
         reply_markup=InlineKeyboardMarkup(
             [
                 [
                     InlineKeyboardButton(
-                        text="⚠️ YES, WIPE DATABASE", callback_data="autofilter_delete"
+                        text="Yᴇs", callback_data="autofilter_delete"
                     )
                 ],
                 [
                     InlineKeyboardButton(
-                        text="CANCEL", callback_data="close_data"
+                        text="Cᴀɴᴄᴇʟ", callback_data="close_data"
                     )
                 ],
             ]
         ),
         quote=True,
     )
-
-
+    
+    
 @Client.on_callback_query(filters.regex(r'^autofilter_delete'))
-async def delete_all_index_confirm(bot, query):
-    await query.message.edit('⏳ Executing total database wipe...')
-    
-    # Fast drop (O(1) operation)
+async def delete_all_index_confirm(bot, message):
     await Media.collection.drop()
-    
-    # CRITICAL: Rebuild indexes immediately so future inserts and searches don't break
-    await Media.ensure_indexes()
-    
-    await query.answer('Database wiped and indexes rebuilt.', show_alert=True)
-    await query.message.edit('✅ **Successfully Deleted All Indexed Files and Restored Database Schema.**')
+    await Media2.collection.drop()
+    await message.answer("Eᴠᴇʀʏᴛʜɪɴɢ's Gᴏɴᴇ")
+    await message.message.edit('Sᴜᴄᴄᴇsғᴜʟʟʏ Dᴇʟᴇᴛᴇᴅ Aʟʟ Tʜᴇ Iɴᴅᴇxᴇᴅ Fɪʟᴇs.')
     
 
 @Client.on_message(filters.command('settings'))

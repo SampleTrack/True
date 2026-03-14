@@ -2,28 +2,38 @@ import os
 import logging
 import random
 import asyncio
+import re
+import json
+import base64
 from datetime import datetime, timedelta, date, time
+
 import pytz
 import aiohttp
+
 from Script import script
+
 from pyrogram import Client, filters, enums
 from pyrogram.errors import ChatAdminRequired, FloodWait
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
 from database.ia_filterdb import Media, get_file_details, unpack_new_file_id
 from database.users_chats_db import db
-from info import CHANNELS, ADMINS, AUTH_CHANNEL, UPDATE_CHANNEL, SUPPORT_CHAT, LOG_CHANNEL, PICS, BATCH_FILE_CAPTION, CUSTOM_FILE_CAPTION, PROTECT_CONTENT, IS_VERIFY, HOW_TO_VERIFY
-from utils import add_new_user, get_settings, get_size, is_subscribed, save_group_settings, temp, verify_user, check_token, check_verification, get_token, get_verify_status
 from database.connections_mdb import active_connection
-import random 
-import re
-import os
-import json
-import base64
+
+from info import (
+    CHANNELS, ADMINS, AUTH_CHANNEL, UPDATE_CHANNEL,
+    SUPPORT_CHAT, LOG_CHANNEL, PICS,
+    BATCH_FILE_CAPTION, CUSTOM_FILE_CAPTION,
+    PROTECT_CONTENT, IS_VERIFY, HOW_TO_VERIFY
+)
+
+from utils import (
+    add_new_user, get_settings, get_size, is_subscribed,
+    save_group_settings, temp, verify_user, check_token,
+    check_verification, get_token, get_verify_status
+)
+
 logger = logging.getLogger(__name__)
-from pyrogram import Client, filters, enums
-from info import ADMINS
-from database.users_chats_db import db
-import re
 
 # Standard regex for link detection
 LINK_PATTERN = r"(https?://|t\.me/|telegram\.me/|telegram\.dog/|www\.)\S+"

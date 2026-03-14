@@ -6,9 +6,7 @@ import re
 import json
 import base64
 from datetime import datetime, timedelta, date, time
-
 import pytz
-import aiohttp
 
 from Script import script
 

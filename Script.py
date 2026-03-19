@@ -15,8 +15,12 @@ class script(object):
 - Source -   
 
 <b>DEVS:</b>"""
-    FORCE_SUB_TEXT = """**Please Join My Updates Channel to use this Bot!**","""
-            
+    
+    FORCE_SUB_TEXT = """
+        🚀 **Limited Time Offer!**
+        Join our updates channel now to unlock **1 Month of Premium Access** for free. This offer is valid only for new members today!
+        ⚠️ **Membership is required** to verify your account and prevent bot abuse."""
+    
     MANUELFILTER_TXT = """Help: <b>Filters</b>
 
 - Filter is the feature were users can set automated replies for a particular keyword and EvaMaria will respond whenever a keyword is found the message

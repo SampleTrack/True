@@ -1,56 +1,68 @@
 import asyncio
 from pyrogram import Client, filters, enums
 from pyrogram.errors import FloodWait, MessageDeleteForbidden
+from info import ADMINS
 
-@Client.on_message(filters.command("purge") & filters.group)
-async def purge_messages(client, message):
-    # 1. Authorization: Only Admins/Owners should use this
-    st = await client.get_chat_member(message.chat.id, message.from_user.id)
-    if st.status not in [enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER]:
-        return await message.reply("You don't have permission to do this.")
-
-    # 2. Logic Check: Must reply to a message to set the starting point
-    if not message.reply_to_message:
-        return await message.reply("Logic flaw: You must reply to a message to define where the purge starts.")
-
-    start_message_id = message.reply_to_message.id
-    end_message_id = message.id
+@Client.on_message(filters.command("purgeall") & filters.group)
+async def manual_purge_all(client, message):
+    chat_id = message.chat.id
+    user_id = message.from_user.id
     
-    # Calculate total messages to delete
-    message_ids = list(range(start_message_id, end_message_id + 1))
-    total_messages = len(message_ids)
+    # Strict Authorization: Only the Group Owner or Bot Admins should have this power.
+    # Allowing standard admins to nuke the whole group is a massive security risk.
+    st = await client.get_chat_member(chat_id, user_id)
+    if st.status != enums.ChatMemberStatus.OWNER and user_id not in ADMINS:
+        return await message.reply("❌ Permission Denied: Only the Group Owner or Bot Admins can use this nuclear option.")
 
-    # Prevent massive accidental purges that trigger floodwaits
-    if total_messages > 1000:
-        return await message.reply("Too many messages. Purge limit is 1000 at a time to prevent API throttling.")
+    latest_msg_id = message.id
+    
+    # Acknowledge the command immediately
+    status_msg = await message.reply(
+        f"⚠️ **MASS PURGE INITIATED**\n\n"
+        f"Target: ID `1` to `{latest_msg_id}`\n"
+        f"This is running in the background. It will take a significant amount of time due to API limits. Expect delays."
+    )
 
-    status_msg = await message.reply(f"🗑 Purging {total_messages} messages...")
-    deleted_count = 0
+    # Push the heavy lifting to the background
+    asyncio.create_task(execute_mass_purge(client, chat_id, latest_msg_id, status_msg))
 
-    # 3. Execution: Telegram allows deleting up to 100 messages per API call
-    for i in range(0, total_messages, 100):
-        batch = message_ids[i:i + 100]
+async def execute_mass_purge(client, chat_id, latest_msg_id, status_msg):
+    # Telegram allows a maximum of 100 message IDs per deletion call
+    chunk_size = 100
+    
+    for start_id in range(1, latest_msg_id + 1, chunk_size):
+        # Create a list of 100 IDs to delete simultaneously
+        end_id = min(start_id + chunk_size, latest_msg_id + 1)
+        message_ids_to_delete = list(range(start_id, end_id))
+        
         try:
-            await client.delete_messages(
-                chat_id=message.chat.id,
-                message_ids=batch,
-                revoke=True # Deletes for everyone
-            )
-            deleted_count += len(batch)
-            await asyncio.sleep(1) # Breathe to avoid flood limits
+            await client.delete_messages(chat_id, message_ids_to_delete, revoke=True)
+            # Mandatory sleep to prevent instant API throttling
+            await asyncio.sleep(1.5)
+            
         except FloodWait as e:
+            # If Telegram limits the bot, respect the timeout exactly
             await asyncio.sleep(e.value)
+            try:
+                await client.delete_messages(chat_id, message_ids_to_delete, revoke=True)
+            except Exception:
+                pass # Move on if it fails again
+                
         except MessageDeleteForbidden:
-            await status_msg.edit("I don't have the right permissions to delete messages here.")
+            # Stop the loop if the bot suddenly loses admin rights
+            try:
+                await status_msg.edit("❌ **Purge Halted:** Bot lacks admin rights to delete messages.")
+            except Exception:
+                pass
             return
+            
         except Exception:
-            continue # Skip messages that might already be deleted or inaccessible
+            # Ignore random exceptions (e.g., all 100 messages were already deleted)
+            pass
 
-    # 4. Cleanup
+    # Update the status when completely finished
     try:
-        final_status = await message.reply(f"✅ Purge complete. {deleted_count} messages deleted.")
-        await asyncio.sleep(3)
-        await status_msg.delete()
-        await final_status.delete()
+        await status_msg.edit(f"✅ **MASS PURGE COMPLETE**\nProcessed all IDs up to `{latest_msg_id}`.")
     except Exception:
         pass
+        

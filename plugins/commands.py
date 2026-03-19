@@ -102,25 +102,25 @@ async def start(client, message):
         # Professional Button Layout
         btn = [
             [
-                InlineKeyboardButton("📢 Jᴏɪɴ Uᴘᴅᴀᴛᴇꜱ Cʜᴀɴɴᴇʟ", url=invite_link)
+                InlineKeyboardButton("🎁 Jᴏɪɴ & Gᴇᴛ 1 Mᴏɴᴛʜ Fʀᴇᴇ", url=invite_link)
             ]
         ]
     
         # Dynamic "Try Again" / Verification Logic
         if len(message.command) > 1:
             try:
-                # Handling deep-link data (e.g., file shares)
-                kk, file_id = message.command[1].split("_", 1)
-                pre = 'checksubp' if kk == 'filep' else 'checksub' 
-                btn.append([InlineKeyboardButton("🔄 Vᴇʀɪғʏ Mᴇᴍʙᴇʀsʜɪᴘ", callback_data=f"{pre}#{file_id}")])
-            except (IndexError, ValueError):
-                # Fallback if split fails
+                # Handling file-specific data
+                data = message.command[1]
+                pre = 'checksubp' if data.startswith('filep_') else 'checksub'
+                file_id = data.split("_", 1)[1] if "_" in data else data
+                
+                btn.append([InlineKeyboardButton("✅ Cʟᴀɪᴍ Aᴄᴄᴇss", callback_data=f"{pre}#{file_id}")])
+            except Exception:
                 btn.append([InlineKeyboardButton("🔄 Tʀʏ Aɢᴀɪɴ", url=f"https://t.me/{temp.U_NAME}?start={message.command[1]}")])
         else:
-            # Standard Start without parameters
-            btn.append([InlineKeyboardButton("🔄 Vᴇʀɪғʏ Mᴇᴍʙᴇʀsʜɪᴘ", callback_data="checksub_start")])
-    
-        # Final Message Send
+            # Standard verification if no file is linked
+            btn.append([InlineKeyboardButton("✅ Cʟᴀɪᴍ Aᴄᴄᴇss", callback_data="checksub_start")])
+    # Sending the message
         try:
             await client.send_message(
                 chat_id=message.from_user.id,

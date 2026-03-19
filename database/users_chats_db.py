@@ -1,7 +1,7 @@
 import pytz
 from datetime import date, datetime, timedelta
 import motor.motor_asyncio
-from info import DATABASE_NAME, DATABASE_URI, IMDB, IMDB_TEMPLATE, MELCOW_NEW_USERS, P_TTI_SHOW_OFF, SINGLE_BUTTON, SPELL_CHECK_REPLY, PROTECT_CONTENT
+from info import DATABASE_NAME, DATABASE_URI, AUTO_DELETE, IMDB, IMDB_TEMPLATE, MELCOW_NEW_USERS, P_TTI_SHOW_OFF, SINGLE_BUTTON, SPELL_CHECK_REPLY, PROTECT_CONTENT
 
 class Database:
     
@@ -190,11 +190,16 @@ class Database:
             'imdb': IMDB,
             'spell_check': SPELL_CHECK_REPLY,
             'welcome': MELCOW_NEW_USERS,
-            'template': IMDB_TEMPLATE
+            'template': IMDB_TEMPLATE,
+            'auto_delete': AUTO_DELETE # Now uses your info.py setting
         }
         chat = await self.grp.find_one({'id':int(id)})
         if chat:
-            return chat.get('settings', default)
+            saved_settings = chat.get('settings', default)
+            for key, value in default.items():
+                if key not in saved_settings:
+                    saved_settings[key] = value
+            return saved_settings
         return default
     
     async def disable_chat(self, chat, reason="No Reason"):

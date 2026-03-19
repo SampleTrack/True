@@ -67,6 +67,7 @@ FILE_STORE_CHANNEL = [int(ch) for ch in (environ.get('FILE_STORE_CHANNEL', '')).
 MELCOW_NEW_USERS = is_enabled((environ.get('MELCOW_NEW_USERS', "True")), True)
 PROTECT_CONTENT = is_enabled((environ.get('PROTECT_CONTENT', "False")), False)
 PUBLIC_FILE_STORE = is_enabled((environ.get('PUBLIC_FILE_STORE', "True")), True)
+AUTO_DELETE = is_enabled((environ.get('AUTO_DELETE', "False")), False)
 
 REQ_CHANNEL = int(environ.get('REQ_CHANNEL', 0))  # या जो भी default चैनल ID हो
 

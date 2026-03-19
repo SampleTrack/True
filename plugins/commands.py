@@ -85,37 +85,61 @@ async def start(client, message):
             parse_mode=enums.ParseMode.HTML
         )
         return
-    # Update the start function in plugins/commands.py
+    # Optimized start function snippet
     if AUTH_CHANNEL and not await is_subscribed(client, message):
         try:
-            # Check if it's already an int or a string representing an int
+            # Convert AUTH_CHANNEL to int if possible, else keep as string/username
             channel_id = int(AUTH_CHANNEL) if str(AUTH_CHANNEL).replace("-", "").isdigit() else AUTH_CHANNEL
-            invite_link = await client.create_chat_invite_link(channel_id)
+            invite_link_obj = await client.create_chat_invite_link(channel_id)
+            invite_link = invite_link_obj.invite_link
         except ChatAdminRequired:
-            logger.error("MAKE SURE BOT IS ADMIN IN FORCESUB CHANNEL")
+            logger.error("❌ CRITICAL: Bot must be Admin in the ForceSub channel!")
             return
+        except Exception as e:
+            logger.error(f"Error creating invite link: {e}")
+            return
+    
+        # Professional Button Layout
         btn = [
-            [   
-                InlineKeyboardButton("Jᴏɪɴ Mʏ Cʜᴀɴɴᴇʟ ✨", url="https://t.me/addlist/HbZqccej2BQ2MmY9"),
-            ],
             [
-                InlineKeyboardButton("Jᴏɪɴ Mʏ Cʜᴀɴɴᴇʟ ✨", url=invite_link.invite_link)
+                InlineKeyboardButton("📢 Jᴏɪɴ Uᴘᴅᴀᴛᴇꜱ Cʜᴀɴɴᴇʟ", url=invite_link)
             ]
         ]
-        if message.command[1] != "subscribe":
+    
+        # Dynamic "Try Again" / Verification Logic
+        if len(message.command) > 1:
             try:
+                # Handling deep-link data (e.g., file shares)
                 kk, file_id = message.command[1].split("_", 1)
                 pre = 'checksubp' if kk == 'filep' else 'checksub' 
-                btn.append([InlineKeyboardButton("⟳ Tʀʏ Aɢᴀɪɴ", callback_data=f"{pre}#{file_id}")])
+                btn.append([InlineKeyboardButton("🔄 Vᴇʀɪғʏ Mᴇᴍʙᴇʀsʜɪᴘ", callback_data=f"{pre}#{file_id}")])
             except (IndexError, ValueError):
-                btn.append([InlineKeyboardButton("⟳ Tʀʏ Aɢᴀɪɴ", url=f"https://t.me/{temp.U_NAME}?start={message.command[1]}")])
-                
+                # Fallback if split fails
+                btn.append([InlineKeyboardButton("🔄 Tʀʏ Aɢᴀɪɴ", url=f"https://t.me/{temp.U_NAME}?start={message.command[1]}")])
+        else:
+            # Standard Start without parameters
+            btn.append([InlineKeyboardButton("🔄 Vᴇʀɪғʏ Mᴇᴍʙᴇʀsʜɪᴘ", callback_data="checksub_start")])
+    
+        # Final Message Send
         try:
-            return await client.send_message(chat_id=message.from_user.id, text=FORCE_SUB_TEXT, reply_markup=InlineKeyboardMarkup(btn), parse_mode=enums.ParseMode.DEFAULT)
+            await client.send_message(
+                chat_id=message.from_user.id,
+                text=FORCE_SUB_TEXT,
+                reply_markup=InlineKeyboardMarkup(btn),
+                parse_mode=enums.ParseMode.MARKDOWN
+            )
+            return
         except Exception as e:
-            print(f"Force Sub Text Error\n{e}")
-            return await client.send_message(chat_id=message.from_user.id, text=script.FORCE_SUB_TEXT, reply_markup=InlineKeyboardMarkup(btn), parse_mode=enums.ParseMode.DEFAULT)
-        
+            logger.error(f"Force Sub Display Error: {e}")
+            # Secondary fallback to hardcoded script text
+            await client.send_message(
+                chat_id=message.from_user.id,
+                text="⚠️ **Join our channel to continue using this bot.**",
+                reply_markup=InlineKeyboardMarkup(btn),
+                parse_mode=enums.ParseMode.MARKDOWN
+            )
+            return
+    
     if len(message.command) == 2 and message.command[1] in ["subscribe", "error", "okay", "help"]:
         buttons = [[
             InlineKeyboardButton('➕ Add Me To Your Groups ➕', url=f'http://t.me/{temp.U_NAME}?startgroup=true')

@@ -8,7 +8,7 @@ from umongo import Instance, Document, fields
 from motor.motor_asyncio import AsyncIOMotorClient
 from marshmallow.exceptions import ValidationError
 from info import DATABASE_URI, DATABASE_NAME, COLLECTION_NAME, USE_CAPTION_FILTER
-from pymongo import InsertOne
+
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -34,65 +34,30 @@ class Media(Document):
 
 
 async def save_file(media):
-    try:
         file_id, file_ref = unpack_new_file_id(media.file_id)
         file_name = re.sub(r"@\w+|(_|\-|\.|\+)", " ", str(media.file_name))
-        
-        file = Media(
-            file_id=file_id,
-            file_ref=file_ref,
-            file_name=file_name,
-            file_size=media.file_size,
-            file_type=media.file_type,
-            mime_type=media.mime_type
-        )
-        
-        await file.commit()
-        logger.info(f"{file_name} is saved in database")
-        return True, 1
-    except ValidationError as e:
-        logger.exception(f'Validation error occurred while saving {getattr(media, "file_name", "NO FILE NAME")}: {str(e)}')
-        return False, 2
-    except DuplicateKeyError:
-        logger.warning(f"{getattr(media, 'file_name', 'NO FILE NAME')} is already saved in database")
-        return False, 0
-    except Exception as e:
-        logger.exception(f'An error occurred while saving {getattr(media, "file_name", "NO FILE NAME")}: {str(e)}')
-        return False, 2
     
-async def save_batch_to_db(batch):
-    """
-    batch: List of Media objects
-    Uses bulk_write to handle duplicates and speed up insertion.
-    """
-    if not batch:
-        return 0, 0
-        
-    operations = []
-    for media in batch:
-        # Prepare the data dictionary manually for bulk operation
-        file_id, _ = unpack_new_file_id(media.file_id) # Extract ID once
-        data = {
-            "_id": file_id,
-            "file_ref": getattr(media, "file_ref", None),
-            "file_name": re.sub(r"@\w+|(_|\-|\.|\+)", " ", str(media.file_name)),
-            "file_size": media.file_size,
-            "file_type": media.file_type,
-            "mime_type": getattr(media, "mime_type", None),
-            "caption": getattr(media, "caption", None)
-        }
-        operations.append(InsertOne(data))
-
-    try:
-        # ordered=False allows the rest to succeed if one is a duplicate
-        result = await Media.collection.bulk_write(operations, ordered=False)
-        return result.inserted_count, len(batch) - result.inserted_count
-    except Exception as e:
-        # Handle cases where all might be duplicates
-        logger.error(f"Bulk write error: {e}")
-        return 0, len(batch)
-        
-        
+        try:
+            file = Media(
+                file_id=file_id,
+                file_ref=file_ref,
+                file_name=file_name,
+                file_size=media.file_size,
+                file_type=media.file_type,
+                mime_type=media.mime_type
+            )
+        except ValidationError:
+            logger.exception("Error occurred while saving file in database")
+            return False, 2
+    
+        try:
+            await file.commit()
+        except DuplicateKeyError:
+            logger.warning(f"{getattr(media, 'file_name', 'NO FILE NAME')} is already saved in database")
+            return False, 0
+    
+        logger.info(f"{getattr(media, 'file_name', 'NO FILE NAME')} is saved in database")
+        return True, 1
 
 
 async def get_search_results(query, file_type=None, max_results=10, offset=0, filter=False):

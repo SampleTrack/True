@@ -6,11 +6,12 @@ from info import CHANNELS, LOG_CHANNEL, ADMINS
 from database.ia_filterdb import save_file
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from utils import temp
-import time
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 lock = asyncio.Lock()
+
+
 
 
 @Client.on_callback_query(filters.regex(r'^index'))
@@ -72,57 +73,59 @@ async def set_skip_number(bot, message):
 
 
 async def index_files_to_db(lst_msg_id, chat, msg, bot):
-    batch = []
-    total_files, duplicate, errors, deleted, no_media, unsupported = 0, 0, 0, 0, 0, 0
-    last_ui_update = time.time()
-
+    total_files = 0
+    duplicate = 0
+    errors = 0
+    deleted = 0
+    no_media = 0
+    unsupported = 0
     async with lock:
         try:
+            current = temp.CURRENT
             temp.CANCEL = False
-            # iter_messages is already a generator, which is good.
             async for message in bot.iter_messages(chat, lst_msg_id, temp.CURRENT):
-                if temp.CANCEL: break
-
-                # 1. Validation Logic (Fast Skip)
-                if message.empty: 
+                if temp.CANCEL:
+                    await msg.edit(f"Successfully Cancelled!!\n\nSaved <code>{total_files}</code> files to dataBase!\nDuplicate Files Skipped: <code>{duplicate}</code>\nDeleted Messages Skipped: <code>{deleted}</code>\nNon-Media messages skipped: <code>{no_media + unsupported}</code>(Unsupported Media - `{unsupported}` )\nErrors Occurred: <code>{errors}</code>")
+                    break
+                current += 1
+                if current % 100 == 0:
+                    can = [[InlineKeyboardButton('Cancel', callback_data='index_cancel')]]
+                    reply = InlineKeyboardMarkup(can)
+                    try:
+                        await msg.edit_text(text=f"Total Messages Fetched: <code>{current}</code>\nTotal Messages Saved: <code>{total_files}</code>\nDuplicate Files Skipped: <code>{duplicate}</code>\nDeleted Messages Skipped: <code>{deleted}</code>\nNon-Media messages skipped: <code>{no_media + unsupported}</code>(Unsupported Media - `{unsupported}` )\nErrors Occurred: <code>{errors}</code>", reply_markup=reply)       
+                    except FloodWait as t:
+                        await asyncio.sleep(t.value)
+                        await msg.edit_text(text=f"Total Messages Fetched: <code>{current}</code>\nTotal Messages Saved: <code>{total_files}</code>\nDuplicate Files Skipped: <code>{duplicate}</code>\nDeleted Messages Skipped: <code>{deleted}</code>\nNon-Media messages skipped: <code>{no_media + unsupported}</code>(Unsupported Media - `{unsupported}` )\nErrors Occurred: <code>{errors}</code>", reply_markup=reply)                          
+                if message.empty:
                     deleted += 1
                     continue
-                if not message.media or message.media not in [enums.MessageMediaType.VIDEO, enums.MessageMediaType.AUDIO, enums.MessageMediaType.DOCUMENT]:
+                elif not message.media:
                     no_media += 1
                     continue
-                
+                elif message.media not in [enums.MessageMediaType.VIDEO, enums.MessageMediaType.AUDIO, enums.MessageMediaType.DOCUMENT]:
+                    unsupported += 1
+                    continue
                 media = getattr(message, message.media.value, None)
-                if not media: continue
-                
+                if not media:
+                    unsupported += 1
+                    continue
                 media.file_type = message.media.value
                 media.caption = message.caption
-                batch.append(media)
-
-                # 2. Batch Processing (The Speed Secret)
-                if len(batch) >= 100:
-                    inserted, dups = await save_batch_to_db(batch)
-                    total_files += inserted
-                    duplicate += dups
-                    batch = [] # Clear buffer
-
-                # 3. UI Updates (Time-based, not count-based)
-                if time.time() - last_ui_update > 5: # Update every 5 seconds
-                    status_text = f"🚀 **Indexing...**\n\nSaved: `{total_files}`\nDuplicates: `{duplicate}`\nSkipped: `{no_media + deleted}`"
-                    try:
-                        await msg.edit_text(status_text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('🚫 CANCEL', "index_cancel")]]))
-                        last_ui_update = time.time()
-                    except FloodWait as e:
-                        await asyncio.sleep(e.value)
-
-            # Final push for remaining items in batch
-            if batch:
-                inserted, dups = await save_batch_to_db(batch)
-                total_files += inserted
-                duplicate += dups
-
+                aynav, vnay = await save_file(media)
+                if aynav:
+                    total_files += 1
+                elif vnay == 0:
+                    duplicate += 1
+                elif vnay == 2:
+                    errors += 1       
         except Exception as e:
             logger.exception(e)
-            await msg.edit(f"Fatal Error: {e}")
-        finally:
-            await msg.edit(f"✅ **Indexing Complete**\nTotal Saved: `{total_files}`\nDuplicates: `{duplicate}`")
+            await msg.edit(f'Error: {e}')
+        else:
+            await msg.edit(f'Succesfully Saved <code>{total_files}</code> To Database!\nDuplicate Files Skipped: <code>{duplicate}</code>\nDeleted Messages Skipped: <code>{deleted}</code>\nNon-Media Messages Skipped: <code>{no_media + unsupported}</code>(Unsupported Media - `{unsupported}` )\nErrors Occurred: <code>{errors}</code>')
+
+
+
+
+
             

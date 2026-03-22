@@ -222,4 +222,26 @@ async def imdb_callback(bot: Client, quer_y: CallbackQuery):
     await quer_y.answer()
         
 
-        
+
+@Client.on_message(filters.command("commands"))
+async def list_commands(client: Client, message: Message):
+    repo_path = "plugins"
+    all_commands = []
+
+    for root, dirs, files in os.walk(repo_path):
+        for file in sorted(files):  # Sorting files to ensure consistent order
+            if file.endswith(".py"):
+                file_path = os.path.join(root, file)
+                all_commands.extend(extract_commands_from_file(file_path))
+                
+    # Removing duplicates while maintaining order
+    seen = set()
+    unique_commands = []
+    for command in all_commands:
+        if command not in seen:
+            seen.add(command)
+            unique_commands.append(command)
+    
+    await message.reply_text("\n".join(f"/{command}" for command in unique_commands))
+
+

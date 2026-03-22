@@ -1,3 +1,5 @@
+
+
 import logging, re, asyncio
 from pyrogram import Client, filters, enums
 from pyrogram.errors import FloodWait
@@ -11,6 +13,16 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 lock = asyncio.Lock()
 
+
+@Client.on_message(filters.chat(CHANNELS) & (filters.document | filters.video | filters.audio))         
+async def media(bot, message):
+    for file_type in ("document", "video", "audio"):
+        media = getattr(message, file_type, None)
+        if media is not None: break
+    else: return
+    media.file_type = file_type
+    media.caption = message.caption
+    await save_file(media)
 
 
 
@@ -123,9 +135,5 @@ async def index_files_to_db(lst_msg_id, chat, msg, bot):
             await msg.edit(f'Error: {e}')
         else:
             await msg.edit(f'Succesfully Saved <code>{total_files}</code> To Database!\nDuplicate Files Skipped: <code>{duplicate}</code>\nDeleted Messages Skipped: <code>{deleted}</code>\nNon-Media Messages Skipped: <code>{no_media + unsupported}</code>(Unsupported Media - `{unsupported}` )\nErrors Occurred: <code>{errors}</code>')
-
-
-
-
 
             

@@ -63,6 +63,15 @@ async def add_new_user(client, user):
     daily_users = await db.daily_users_count(today) + 1
     await db.add_user(user.id, user.first_name)
     await client.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(a=user.id, b=user.mention, c=user.username, d=total_users, e=daily_users, f=str(today), g=time, h=temp.U_NAME))
+
+def extract_commands(file_path):
+    commands = []
+    with open(file_path, 'r', encoding='utf-8') as file:
+        for line in file:
+            match = re.search(r'filters\.command\(["\'](\w+)["\']', line)
+            if match:
+                commands.append(match.group(1))
+    return commands
     
 async def is_subscribed(bot, query):
     try:

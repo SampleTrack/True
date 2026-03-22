@@ -147,58 +147,6 @@ async def advantage_spoll_choker(bot, query):
 async def cb_handler(client: Client, query: CallbackQuery):
     if query.data == "close_data":
         await query.message.delete()
-    elif query.data == "delallconfirm":
-        userid = query.from_user.id
-        chat_type = query.message.chat.type
-
-        if chat_type == enums.ChatType.PRIVATE:
-            grpid = await active_connection(str(userid))
-            if grpid is not None:
-                grp_id = grpid
-                try:
-                    chat = await client.get_chat(grpid)
-                    title = chat.title
-                except:
-                    await query.message.edit_text("Make sure I'm present in your group!!", quote=True)
-                    return await query.answer('Proceeding...')
-            else:
-                await query.message.edit_text(
-                    "I'm not connected to any groups!\nCheck /connections or connect to any groups",
-                    quote=True
-                )
-                return await query.answer('Proceeding...')
-
-        elif chat_type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
-            grp_id = query.message.chat.id
-            title = query.message.chat.title
-
-        else:
-            return await query.answer('Proceeding...')
-
-        st = await client.get_chat_member(grp_id, userid)
-        if (st.status == enums.ChatMemberStatus.OWNER) or (str(userid) in ADMINS):
-            await del_all(query.message, grp_id, title)
-        else:
-            await query.answer("You need to be Group Owner or an Auth User to do that!", show_alert=True)
-    elif query.data == "delallcancel":
-        userid = query.from_user.id
-        chat_type = query.message.chat.type
-
-        if chat_type == enums.ChatType.PRIVATE:
-            await query.message.reply_to_message.delete()
-            await query.message.delete()
-
-        elif chat_type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
-            grp_id = query.message.chat.id
-            st = await client.get_chat_member(grp_id, userid)
-            if (st.status == enums.ChatMemberStatus.OWNER) or (str(userid) in ADMINS):
-                await query.message.delete()
-                try:
-                    await query.message.reply_to_message.delete()
-                except:
-                    pass
-            else:
-                await query.answer("That's not for you!!", show_alert=True)
     elif "groupcb" in query.data:
         await query.answer()
         group_id = query.data.split(":")[1]
@@ -320,16 +268,6 @@ async def cb_handler(client: Client, query: CallbackQuery):
                 "Your connected group details ;\n\n",
                 reply_markup=InlineKeyboardMarkup(buttons)
             )
-    elif "alertmessage" in query.data:
-        grp_id = query.message.chat.id
-        i = query.data.split(":")[1]
-        keyword = query.data.split(":")[2]
-        reply_text, btn, alerts, fileid = await find_filter(grp_id, keyword)
-        if alerts is not None:
-            alerts = ast.literal_eval(alerts)
-            alert = alerts[int(i)]
-            alert = alert.replace("\\n", "\n").replace("\\t", "\t")
-            await query.answer(alert, show_alert=True)
     if query.data.startswith("file"):
         user_id = query.from_user.id
         clicked = query.from_user.id
@@ -890,50 +828,3 @@ async def advantage_spell_chok(msg):
                     reply_markup=InlineKeyboardMarkup(btn))
 
 
-async def manual_filters(client, message, text=False):
-    group_id = message.chat.id
-    name = text or message.text
-    reply_id = message.reply_to_message.id if message.reply_to_message else message.id
-    keywords = await get_filters(group_id)
-    for keyword in reversed(sorted(keywords, key=len)):
-        pattern = r"( |^|[^\w])" + re.escape(keyword) + r"( |$|[^\w])"
-        if re.search(pattern, name, flags=re.IGNORECASE):
-            reply_text, btn, alert, fileid = await find_filter(group_id, keyword)
-
-            if reply_text:
-                reply_text = reply_text.replace("\\n", "\n").replace("\\t", "\t")
-
-            if btn is not None:
-                try:
-                    if fileid == "None":
-                        if btn == "[]":
-                            await client.send_message(group_id, reply_text, disable_web_page_preview=True)
-                        else:
-                            button = eval(btn)
-                            await client.send_message(
-                                group_id,
-                                reply_text,
-                                disable_web_page_preview=True,
-                                reply_markup=InlineKeyboardMarkup(button),
-                                reply_to_message_id=reply_id
-                            )
-                    elif btn == "[]":
-                        await client.send_cached_media(
-                            group_id,
-                            fileid,
-                            caption=reply_text or "",
-                            reply_to_message_id=reply_id
-                        )
-                    else:
-                        button = eval(btn)
-                        await message.reply_cached_media(
-                            fileid,
-                            caption=reply_text or "",
-                            reply_markup=InlineKeyboardMarkup(button),
-                            reply_to_message_id=reply_id
-                        )
-                except Exception as e:
-                    logger.exception(e)
-                break
-    else:
-        return False

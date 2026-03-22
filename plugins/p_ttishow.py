@@ -1,16 +1,18 @@
 from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from pyrogram.errors.exceptions.bad_request_400 import MessageTooLong, PeerIdInvalid
-from info import ADMINS, LOG_CHANNEL, SUPPORT_CHAT, UPDATE_CHANNEL, MELCOW_NEW_USERS
+from info import ADMINS, LOG_CHANNEL, SUPPORT_CHAT, UPDATE_CHANNEL, MELCOW_NEW_USERS, MELCOW_PIC
 from database.users_chats_db import db
 from database.ia_filterdb import Media
 from utils import get_size, temp, get_settings, update_verify_status, save_group_settings
 from Script import script
 import time
-import datetime
-from pyrogram.errors import ChatAdminRequired
+from datetime import datetime, timedelta, date, time # Use this exclusively
+from pyrogram.errors import ChatAdminRequired, ChannelPrivate
 import asyncio
 import pytz
+
+
 
 @Client.on_message(filters.new_chat_members & filters.group)
 async def save_group(bot, message):
@@ -263,8 +265,76 @@ async def gen_invite(bot, message):
         return await message.reply(f'Error {e}')
     await message.reply(f'Here is your Invite Link {link.invite_link}')
 
+@Client.on_message(filters.command("update_user"))
+async def update_user(bot, message):
+    start_time = time.time()
+    userid = message.from_user.id
+    user = await bot.get_users(int(userid))
+    sts = await message.reply_text('Updating user...')
+
+    short_temp = "1"
+    date_temp = "1999-12-31"
+    time_temp = "23:59:59"
+    
+    await update_verify_status(bot, user.id, short_temp, date_temp, time_temp)
+
+    time_taken = datetime.timedelta(seconds=int(time.time() - start_time))
+    await sts.edit(f"User updated with default verification status.\nTime taken: {time_taken}")
 
 
+@Client.on_message(filters.command("updateusers") & filters.user(ADMINS))
+async def update_users_verifications(bot, message):
+    sts = await message.reply_text('Updating users...')
+    total_users = await db.total_users_count()
+    start_time = time.time()
+    count = 0
+    complete = 0
+    
+    users = await db.get_all_users()
+    
+    async for user in users:
+        user_id = user.get("id")
+        short_temp = "1"
+        date_temp = "1999-12-31"
+        time_temp = "23:59:59"
+        await update_verify_status(bot, user_id, short_temp, date_temp, time_temp)
+        
+        count += 1
+        complete += 1
+        
+        if not complete % 20:
+            await sts.edit(f"Total Users: {total_users}\nTotal Complete: {complete}\nTotal Complete Percentage: {complete/total_users*100:.2f}%")
+    
+    time_taken = datetime.timedelta(seconds=int(time.time()-start_time))
+    await sts.edit(f"All users updated with default verification status.\nTime taken: {time_taken}")
+
+@Client.on_message(filters.command('deleteusers') & filters.user(ADMINS))
+async def deleteusers(bot, message):
+    msg = await message.reply('Starting deletion of users...')
+    total_users = await db.total_users_count()
+    start_time = time.time()
+    count = 0
+    complete = 0
+    
+    users = await db.get_all_users()
+    async for user in users:
+        try:
+            print(user)
+            user_id = user['id']  # Update this to match the correct key
+            await db.delete_user(user_id)
+            count += 1
+            complete += 1
+            
+            if not complete % 20:
+                await msg.edit(f"Total Users: {total_users}\nTotal Deleted: {complete}\nTotal Deletion Percentage: {complete / total_users * 100:.2f}%")
+        
+        except KeyError as e:
+            await msg.edit(f"KeyError: {e}. User object: {user}")
+            continue  # Skip this user and continue with the next
+    
+    time_taken = datetime.timedelta(seconds=int(time.time() - start_time))
+    await msg.edit(f"All users deleted.\nTime taken: {time_taken}")
+    
 
 @Client.on_message(filters.command('ban') & filters.user(ADMINS))
 async def ban_a_user(bot, message):
@@ -365,3 +435,42 @@ async def list_chats(bot, message):
             outfile.write(out)
         await message.reply_document('chats.txt', caption="List Of Chats")
         
+@Client.on_message(filters.command('updatesettings') & filters.user(ADMINS))
+async def update_settings(_, message):
+    msg = await message.reply('Getting list of chats...')
+    template = (
+        "<b>Query: {query}</b> \n‌‌‌‌IMDb Data:\n\n"
+        "🏷 Title: <a href={url}>{title}</a>\n"
+        "🎭 Genres: {genres}\n"
+        "📆 Year: <a href={url}/releaseinfo>{year}</a>\n"
+        "🌟 Rating: <a href={url}/ratings>{rating}</a> / 10"
+    )
+    totalchats = await db.total_chat_count()
+    chats = await db.get_all_chats()
+    start_time = time.time()
+    complete = 0
+
+    async for chat in chats:
+        await save_group_settings(chat['id'], 'button', True)
+        await save_group_settings(chat['id'], 'botpm', False)
+        await save_group_settings(chat['id'], 'file_secure', False)
+        await save_group_settings(chat['id'], 'imdb', False)
+        await save_group_settings(chat['id'], 'spell_check', True)
+        await save_group_settings(chat['id'], 'welcome', True)
+        await save_group_settings(chat['id'], 'template', template)
+        
+        complete += 1
+        
+        if complete % 20 == 0:
+            await msg.edit(
+                f"Total Chats: {totalchats}\n"
+                f"Total Complete: {complete}\n"
+                f"Total Complete Percentage: {complete / totalchats * 100:.2f}%"
+            )
+
+    time_taken = datetime.timedelta(seconds=int(time.time() - start_time))
+    await msg.edit(
+        f"All Chats updated with default settings.\n"
+        f"Time taken: {time_taken}"
+    )
+    

@@ -59,7 +59,41 @@ async def save_file(media):
         logger.exception(f'An error occurred while saving {getattr(media, "file_name", "NO FILE NAME")}: {str(e)}')
         return False, 2
     
-    
+async def save_batch_to_db(batch):
+    """
+    batch: List of Media objects
+    Uses bulk_write to handle duplicates and speed up insertion.
+    """
+    if not batch:
+        return 0, 0
+        
+    operations = []
+    for media in batch:
+        # Prepare the data dictionary manually for bulk operation
+        file_id, _ = unpack_new_file_id(media.file_id) # Extract ID once
+        data = {
+            "_id": file_id,
+            "file_ref": getattr(media, "file_ref", None),
+            "file_name": re.sub(r"@\w+|(_|\-|\.|\+)", " ", str(media.file_name)),
+            "file_size": media.file_size,
+            "file_type": media.file_type,
+            "mime_type": getattr(media, "mime_type", None),
+            "caption": getattr(media, "caption", None)
+        }
+        operations.append(InsertOne(data))
+
+    try:
+        # ordered=False allows the rest to succeed if one is a duplicate
+        result = await Media.collection.bulk_write(operations, ordered=False)
+        return result.inserted_count, len(batch) - result.inserted_count
+    except Exception as e:
+        # Handle cases where all might be duplicates
+        logger.error(f"Bulk write error: {e}")
+        return 0, len(batch)
+        
+        
+
+
 async def get_search_results(query, file_type=None, max_results=10, offset=0, filter=False):
     """For given query return (results, next_offset)"""
 

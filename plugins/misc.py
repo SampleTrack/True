@@ -5,7 +5,7 @@ from info import IMDB_TEMPLATE
 from utils import extract_user, get_file_id, get_poster, last_online, extract_commands
 import time
 from datetime import datetime
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 import logging
 from database.users_chats_db import db
 logger = logging.getLogger(__name__)

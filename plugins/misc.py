@@ -2,7 +2,7 @@ import os
 from pyrogram import Client, filters, enums
 from pyrogram.errors.exceptions.bad_request_400 import UserNotParticipant, MediaEmpty, PhotoInvalidDimensions, WebpageMediaEmpty
 from info import IMDB_TEMPLATE
-from utils import extract_user, get_file_id, get_poster, last_online
+from utils import extract_user, get_file_id, get_poster, last_online, extract_commands
 import time
 from datetime import datetime
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
@@ -232,7 +232,7 @@ async def list_commands(client: Client, message: Message):
         for file in sorted(files):  # Sorting files to ensure consistent order
             if file.endswith(".py"):
                 file_path = os.path.join(root, file)
-                all_commands.extend(extract_commands_from_file(file_path))
+                all_commands.extend(extract_commands(file_path))
                 
     # Removing duplicates while maintaining order
     seen = set()

@@ -35,38 +35,28 @@ class Media(Document):
 
 
 async def save_file(media):
-    """Save file in database"""
-
-    # TODO: Find better way to get same file_id for same media to avoid duplicates
     file_id, file_ref = unpack_new_file_id(media.file_id)
-    file_name = re.sub(r"(_|\-|\.|\+)", " ", str(media.file_name))
+    file_name = re.sub(r"@\w+|(_|\-|\.|\+)", " ", str(media.file_name))
     try:
-        if await Media.count_documents({'file_id': file_id}, limit=1):
-            logger.warning(f'{getattr(media, "file_name", "NO_FILE")} is already saved in primary DB !')
-            return False, 0
-        file = saveMedia(
+        file = Media(
             file_id=file_id,
             file_ref=file_ref,
             file_name=file_name,
             file_size=media.file_size,
             file_type=media.file_type,
-            mime_type=media.mime_type,
-            caption=media.caption.html if media.caption else None,
+            mime_type=media.mime_type
         )
     except ValidationError:
-        logger.exception('Error occurred while saving file in database')
+        logger.exception('Error Occurred While Saving File In Database')
         return False, 2
     else:
         try:
             await file.commit()
-        except DuplicateKeyError:  
-            logger.warning(
-                f'{getattr(media, "file_name", "NO_FILE")} is already saved in database'
-            )
-
+        except DuplicateKeyError:      
+            logger.warning(str(getattr(media, "file_name", "NO FILE NAME")) + " is already saved in database")
             return False, 0
         else:
-            logger.info(f'{getattr(media, "file_name", "NO_FILE")} is saved to database')
+            logger.info(str(getattr(media, "file_name", "NO FILE NAME")) + " is saved in database")
             return True, 1
 
     

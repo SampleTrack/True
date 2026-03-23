@@ -34,27 +34,8 @@ class Media(Document):
 
 
 async def save_file(media):
-    """
-    Saves a file to the database after checking for duplicates 
-    based on Name, Size, and Mime Type.
-    """
-    # 1. Standardize the file name for consistent searching
-    file_name = re.sub(r"@\w+|(_|\-|\.|\+)", " ", str(media.file_name))
-    
-    # 2. Check if a file with the same name, size, and type already exists
-    # This prevents duplicates even if the Telegram file_id is different.
-    duplicate_check = await Media.find_one({
-        'file_name': file_name,
-        'file_size': media.file_size,
-        'mime_type': media.mime_type
-    })
-    
-    if duplicate_check:
-        logger.warning(f"{file_name} is already saved in database (Duplicate Detected)")
-        return False, 0 # Return 0 to indicate a duplicate was found
-
-    # 3. If no duplicate, proceed to save
     file_id, file_ref = unpack_new_file_id(media.file_id)
+    file_name = re.sub(r"@\w+|(_|\-|\.|\+)", " ", str(media.file_name))
     try:
         file = Media(
             file_id=file_id,
@@ -64,13 +45,18 @@ async def save_file(media):
             file_type=media.file_type,
             mime_type=media.mime_type
         )
-        await file.commit()
-        logger.info(f"{file_name} saved successfully")
-        return True, 1
-    except Exception as e:
-        logger.exception(f'Error saving {file_name}: {e}')
+    except ValidationError:
+        logger.exception('Error Occurred While Saving File In Database')
         return False, 2
-
+    else:
+        try:
+            await file.commit()
+        except DuplicateKeyError:      
+            logger.warning(str(getattr(media, "file_name", "NO FILE NAME")) + " is already saved in database")
+            return False, 0
+        else:
+            logger.info(str(getattr(media, "file_name", "NO FILE NAME")) + " is saved in database")
+            return True, 1
     
 async def get_search_results(query, file_type=None, max_results=10, offset=0, filter=False):
     """For given query return (results, next_offset)"""

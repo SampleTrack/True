@@ -13,7 +13,8 @@ from info import DATABASE_URI, DATABASE_NAME, COLLECTION_NAME, USE_CAPTION_FILTE
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-
+#some basic variables needed
+saveMedia = None
 client = AsyncIOMotorClient(DATABASE_URI)
 db = client[DATABASE_NAME]
 instance = Instance.from_db(db)
@@ -34,33 +35,40 @@ class Media(Document):
 
 
 async def save_file(media):
-    """Saves media to the database and returns a status string instead of garbage magic numbers."""
-    file_id, file_ref = unpack_new_file_id(media.file_id) # Assuming this is imported/defined elsewhere
-    file_name = re.sub(r"@\w+|(_|\-|\.|\+)", " ", str(media.file_name))
-    
+    """Save file in database"""
+
+    # TODO: Find better way to get same file_id for same media to avoid duplicates
+    file_id, file_ref = unpack_new_file_id(media.file_id)
+    file_name = re.sub(r"(_|\-|\.|\+)", " ", str(media.file_name))
     try:
-        file = Media(
+        if await Media.count_documents({'file_id': file_id}, limit=1):
+            logger.warning(f'{getattr(media, "file_name", "NO_FILE")} is already saved in primary DB !')
+            return False, 0
+        file = saveMedia(
             file_id=file_id,
             file_ref=file_ref,
             file_name=file_name,
             file_size=media.file_size,
             file_type=media.file_type,
-            mime_type=media.mime_type
+            mime_type=media.mime_type,
+            caption=media.caption.html if media.caption else None,
         )
-    except ValidationError as e:
-        logger.exception(f'Validation Error Occurred While Saving File: {e}')
-        return "ERROR"
+    except ValidationError:
+        logger.exception('Error occurred while saving file in database')
+        return False, 2
+    else:
+        try:
+            await file.commit()
+        except DuplicateKeyError:  
+            logger.warning(
+                f'{getattr(media, "file_name", "NO_FILE")} is already saved in database'
+            )
 
-    try:
-        await file.commit()
-        logger.info(f"{getattr(media, 'file_name', 'NO FILE NAME')} is saved in database")
-        return "SAVED"
-    except DuplicateKeyError:      
-        logger.warning(f"{getattr(media, 'file_name', 'NO FILE NAME')} is already saved in database")
-        return "DUPLICATE"
-    except Exception as e:
-        logger.exception(f'Unexpected Error While Saving File: {e}')
-        return "ERROR"
+            return False, 0
+        else:
+            logger.info(f'{getattr(media, "file_name", "NO_FILE")} is saved to database')
+            return True, 1
+
     
 async def get_search_results(query, file_type=None, max_results=10, offset=0, filter=False):
     """For given query return (results, next_offset)"""

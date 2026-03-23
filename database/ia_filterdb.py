@@ -34,8 +34,10 @@ class Media(Document):
 
 
 async def save_file(media):
-    file_id, file_ref = unpack_new_file_id(media.file_id)
+    """Saves media to the database and returns a status string instead of garbage magic numbers."""
+    file_id, file_ref = unpack_new_file_id(media.file_id) # Assuming this is imported/defined elsewhere
     file_name = re.sub(r"@\w+|(_|\-|\.|\+)", " ", str(media.file_name))
+    
     try:
         file = Media(
             file_id=file_id,
@@ -45,18 +47,20 @@ async def save_file(media):
             file_type=media.file_type,
             mime_type=media.mime_type
         )
-    except ValidationError:
-        logger.exception('Error Occurred While Saving File In Database')
-        return False, 2
-    else:
-        try:
-            await file.commit()
-        except DuplicateKeyError:      
-            logger.warning(str(getattr(media, "file_name", "NO FILE NAME")) + " is already saved in database")
-            return False, 0
-        else:
-            logger.info(str(getattr(media, "file_name", "NO FILE NAME")) + " is saved in database")
-            return True, 1
+    except ValidationError as e:
+        logger.exception(f'Validation Error Occurred While Saving File: {e}')
+        return "ERROR"
+
+    try:
+        await file.commit()
+        logger.info(f"{getattr(media, 'file_name', 'NO FILE NAME')} is saved in database")
+        return "SAVED"
+    except DuplicateKeyError:      
+        logger.warning(f"{getattr(media, 'file_name', 'NO FILE NAME')} is already saved in database")
+        return "DUPLICATE"
+    except Exception as e:
+        logger.exception(f'Unexpected Error While Saving File: {e}')
+        return "ERROR"
     
 async def get_search_results(query, file_type=None, max_results=10, offset=0, filter=False):
     """For given query return (results, next_offset)"""

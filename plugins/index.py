@@ -1,132 +1,115 @@
 import asyncio
-import re
-import time
 from pyrogram import Client, filters, enums
-from pyrogram.errors import FloodWait
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from database.ia_filterdb import Media, save_file
 from info import ADMINS, LOG_CHANNEL
 from utils import temp, get_size
 
-# Temporary storage for index data to handle callbacks
-INDEX_CONFIRM = {}
+# Temporary cache to store indexing details for confirmation
+INDEX_DATA = {}
 
-@Client.on_message(filters.command("index") & filters.user(ADMINS))
-async def index_start(client, message):
-    if len(message.command) < 3:
-        return await message.reply("<b>Format:</b> `/index [Channel ID/Username] [Start ID]`\nExample: `/index -1001234567 1`")
+@Client.on_message(filters.group & filters.forwarded & filters.user(ADMINS))
+async def forwarded_index_trigger(client, message):
+    # Ensure the forward is from a channel
+    if not message.forward_from_chat or message.forward_from_chat.type != enums.ChatType.CHANNEL:
+        return
 
-    chat_id = message.command[1]
-    try:
-        chat_id = int(chat_id)
-    except:
-        pass
+    chat_id = message.forward_from_chat.id
+    chat_title = message.forward_from_chat.title
     
-    start_id = int(message.command[2])
-    
-    try:
-        chat = await client.get_chat(chat_id)
-    except Exception as e:
-        return await message.reply(f"Error accessing chat: {e}")
+    # Estimate the total messages (from msg 1 to the forwarded message ID)
+    last_msg_id = message.forward_from_message_id
+    total_messages = last_msg_id
 
-    # Estimate logic: Get the last message ID
-    last_msg_id = message.id if chat_id == message.chat.id else (await client.get_messages(chat_id, 1)).id
-    total_files = last_msg_id - start_id
-    
-    # Store data for callback
-    INDEX_CONFIRM[message.from_user.id] = {
+    # Store data for the callback session
+    INDEX_DATA[message.from_user.id] = {
         "chat_id": chat_id,
-        "start": start_id,
-        "last": last_msg_id
+        "last_id": last_msg_id
     }
 
     buttons = [
-        [InlineKeyboardButton("✅ START INDEXING", callback_data="start_bulk_index")],
-        [InlineKeyboardButton("❌ CANCEL", callback_data="close_data")]
+        [
+            InlineKeyboardButton("✅ Start Adding", callback_data="confirm_bulk_index"),
+            InlineKeyboardButton("❌ Cancel", callback_data="close_data")
+        ]
     ]
 
     await message.reply_text(
-        f"📑 **Bulk Indexing Request**\n\n"
-        f"📍 **Source:** `{chat.title}`\n"
-        f"🔢 **Start ID:** `{start_id}`\n"
-        f"🏁 **End ID:** `{last_msg_id}`\n"
-        f"📦 **Estimated Messages:** `{total_files}`\n\n"
-        f"Estimated time: ~{total_files // 10} seconds (excluding FloodWaits).",
-        reply_markup=InlineKeyboardMarkup(buttons)
+        text=f"📑 **Bulk Indexing Detected**\n\n"
+             f"📣 **Channel:** `{chat_title}`\n"
+             f"🆔 **Channel ID:** `{chat_id}`\n"
+             f"🔢 **Messages to Scan:** `1` to `{last_msg_id}`\n"
+             f"📊 **Total Estimated:** `{total_messages}`\n\n"
+             f"Do you want to index all media from this channel?",
+        reply_markup=InlineKeyboardMarkup(buttons),
+        quote=True
     )
 
-@Client.on_callback_query(filters.regex("start_bulk_index") & filters.user(ADMINS))
-async def run_bulk_index(client, query: CallbackQuery):
-    data = INDEX_CONFIRM.get(query.from_user.id)
+@Client.on_callback_query(filters.regex(r"^confirm_bulk_index") & filters.user(ADMINS))
+async def start_indexing_callback(client, query: CallbackQuery):
+    user_id = query.from_user.id
+    data = INDEX_DATA.get(user_id)
+    
     if not data:
-        return await query.answer("Session expired, try command again.", show_alert=True)
+        return await query.answer("Session Expired! Forward the message again.", show_alert=True)
 
-    await query.message.edit_text("🚀 **Indexing Started...** Check progress below.")
+    await query.message.edit_text("🚀 **Indexing Started...**\nProcessing messages from ID 1.")
     
     chat_id = data['chat_id']
-    start = data['start']
-    last = data['last']
+    last_id = data['last_id']
     
     success = 0
     duplicates = 0
     errors = 0
-    deleted = 0
-    total_processed = 0
-    
-    progress_msg = await client.send_message(query.message.chat.id, "Starting processing...")
+    total_scanned = 0
 
-    # Iterate through message range using your bot's iter_messages (from bot.py)
-    async for message in client.iter_messages(chat_id, last, start):
-        total_processed += 1
+    # Using the iter_messages method defined in bot.py
+    async for message in client.iter_messages(chat_id, limit=last_id, offset=1):
+        total_scanned += 1
         
-        if message.empty:
-            deleted += 1
-        elif not message.media or message.media not in [enums.MessageMediaType.DOCUMENT, enums.MessageMediaType.VIDEO, enums.MessageMediaType.AUDIO]:
-            errors += 1
-        else:
-            # Extract media object
+        # Only process media types supported by your database
+        if message.media in [enums.MessageMediaType.DOCUMENT, enums.MessageMediaType.VIDEO, enums.MessageMediaType.AUDIO]:
             media_type = message.media.value
-            media = getattr(message, media_type, None)
+            media = getattr(message, media_type)
+            media.file_type = media_type
+            media.caption = message.caption
             
-            if media:
-                media.file_type = media_type
-                media.caption = message.caption
-                # Using save_file from database/ia_filterdb.py
-                # It returns (Status, Code). 1=Success, 0=Duplicate
-                sts, code = await save_file(media)
-                if sts:
-                    success += 1
-                elif code == 0:
-                    duplicates += 1
-                else:
-                    errors += 1
-        
-        # Update status every 20 messages to avoid spamming API
-        if total_processed % 20 == 0:
+            # Use the existing save_file function which handles duplicates
+            status, code = await save_file(media)
+            
+            if status:
+                success += 1
+            elif code == 0: # 0 indicates DuplicateKeyError in your ia_filterdb.py
+                duplicates += 1
+            else:
+                errors += 1
+        else:
+            errors += 1
+
+        # Periodic status updates to avoid spamming the Telegram API
+        if total_scanned % 50 == 0:
             try:
-                await progress_msg.edit(
-                    f"🔄 **Indexing in Progress...**\n\n"
-                    f"✅ Saved: `{success}`\n"
-                    f"⏩ Duplicates: `{duplicates}`\n"
-                    f"🗑 Deleted/Empty: `{deleted}`\n"
-                    f"❌ Non-Media: `{errors}`\n"
-                    f"📊 Total Processed: `{total_processed}`"
+                await query.message.edit_text(
+                    f"🔄 **Indexing Progress...**\n\n"
+                    f"✅ Added: `{success}`\n"
+                    f"⏩ Skipped (Duplicate): `{duplicates}`\n"
+                    f"❌ Non-Media/Errors: `{errors}`\n"
+                    f"📊 Scanned: `{total_scanned}` / `{last_id}`"
                 )
-            except FloodWait as e:
-                await asyncio.sleep(e.value)
-            except Exception:
+            except:
                 pass
 
-    await progress_msg.edit(
-        f"🏁 **Indexing Completed!**\n\n"
-        f"✅ Total Saved: `{success}`\n"
-        f"⏩ Duplicates Skipped: `{duplicates}`\n"
-        f"🗑 Deleted Messages: `{deleted}`\n"
-        f"❌ Non-Media Skipped: `{errors}`\n"
-        f"📦 Total Scanned: `{total_processed}`"
+    # Final Summary
+    await query.message.reply_text(
+        text=f"🏁 **Indexing Completed!**\n\n"
+             f"✅ **Total Added:** `{success}`\n"
+             f"⏩ **Duplicates Found:** `{duplicates}`\n"
+             f"❌ **Invalid/Deleted:** `{errors}`\n"
+             f"📦 **Final Count:** `{success + duplicates}`",
+        quote=True
     )
     
     # Cleanup session
-    INDEX_CONFIRM.pop(query.from_user.id, None)
-    await query.answer("Bulk Indexing Finished!", show_alert=True)
-  
+    INDEX_DATA.pop(user_id, None)
+    await query.answer("Bulk indexing finished successfully!")
+    

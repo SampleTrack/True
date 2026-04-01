@@ -1,115 +1,185 @@
+import logging
 import asyncio
 from pyrogram import Client, filters, enums
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
-from database.ia_filterdb import Media, save_file
-from info import ADMINS, LOG_CHANNEL
-from utils import temp, get_size
+from pyrogram.errors import FloodWait
+from pyrogram.errors.exceptions.bad_request_400 import ChannelInvalid, ChatAdminRequired, UsernameInvalid, UsernameNotModified
+from info import ADMINS
+from info import INDEX_REQ_CHANNEL as LOG_CHANNEL
+from database.ia_filterdb import save_file
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from utils import temp
+import re
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+lock = asyncio.Lock()
 
-# Temporary cache to store indexing details for confirmation
-INDEX_DATA = {}
 
-@Client.on_message(filters.group & filters.forwarded & filters.user(ADMINS))
-async def forwarded_index_trigger(client, message):
-    # Ensure the forward is from a channel
-    if not message.forward_from_chat or message.forward_from_chat.type != enums.ChatType.CHANNEL:
+@Client.on_callback_query(filters.regex(r'^index'))
+async def index_files(bot, query):
+    if query.data.startswith('index_cancel'):
+        temp.CANCEL = True
+        return await query.answer("Cancelling Indexing")
+    _, raju, chat, lst_msg_id, from_user = query.data.split("#")
+    if raju == 'reject':
+        await query.message.delete()
+        await bot.send_message(int(from_user),
+                               f'Your Submission for indexing {chat} has been decliened by our moderators.',
+                               reply_to_message_id=int(lst_msg_id))
         return
 
-    chat_id = message.forward_from_chat.id
-    chat_title = message.forward_from_chat.title
-    
-    # Estimate the total messages (from msg 1 to the forwarded message ID)
-    last_msg_id = message.forward_from_message_id
-    total_messages = last_msg_id
+    if lock.locked():
+        return await query.answer('Wait until previous process complete.', show_alert=True)
+    msg = query.message
 
-    # Store data for the callback session
-    INDEX_DATA[message.from_user.id] = {
-        "chat_id": chat_id,
-        "last_id": last_msg_id
-    }
+    await query.answer('Processing...⏳', show_alert=True)
+    if int(from_user) not in ADMINS:
+        await bot.send_message(int(from_user),
+                               f'Your Submission for indexing {chat} has been accepted by our moderators and will be added soon.',
+                               reply_to_message_id=int(lst_msg_id))
+    await msg.edit(
+        "Starting Indexing",
+        reply_markup=InlineKeyboardMarkup(
+            [[InlineKeyboardButton('Cancel', callback_data='index_cancel')]]
+        )
+    )
+    try:
+        chat = int(chat)
+    except:
+        chat = chat
+    await index_files_to_db(int(lst_msg_id), chat, msg, bot)
 
+
+@Client.on_message((filters.forwarded | (filters.regex("(https://)?(t\.me/|telegram\.me/|telegram\.dog/)(c/)?(\d+|[a-zA-Z_0-9]+)/(\d+)$")) & filters.text ) & filters.private & filters.incoming)
+async def send_for_index(bot, message):
+    if message.text:
+        regex = re.compile("(https://)?(t\.me/|telegram\.me/|telegram\.dog/)(c/)?(\d+|[a-zA-Z_0-9]+)/(\d+)$")
+        match = regex.match(message.text)
+        if not match:
+            return await message.reply('Invalid link')
+        chat_id = match.group(4)
+        last_msg_id = int(match.group(5))
+        if chat_id.isnumeric():
+            chat_id  = int(("-100" + chat_id))
+    elif message.forward_from_chat.type == enums.ChatType.CHANNEL:
+        last_msg_id = message.forward_from_message_id
+        chat_id = message.forward_from_chat.username or message.forward_from_chat.id
+    else:
+        return
+    try:
+        await bot.get_chat(chat_id)
+    except ChannelInvalid:
+        return await message.reply('This may be a private channel / group. Make me an admin over there to index the files.')
+    except (UsernameInvalid, UsernameNotModified):
+        return await message.reply('Invalid Link specified.')
+    except Exception as e:
+        logger.exception(e)
+        return await message.reply(f'Errors - {e}')
+    try:
+        k = await bot.get_messages(chat_id, last_msg_id)
+    except:
+        return await message.reply('Make Sure That Iam An Admin In The Channel, if channel is private')
+    if k.empty:
+        return await message.reply('This may be group and iam not a admin of the group.')
+
+    if message.from_user.id in ADMINS:
+        buttons = [
+            [
+                InlineKeyboardButton('Yes',
+                                     callback_data=f'index#accept#{chat_id}#{last_msg_id}#{message.from_user.id}')
+            ],
+            [
+                InlineKeyboardButton('close', callback_data='close_data'),
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(buttons)
+        return await message.reply(
+            f'Do you Want To Index This Channel/ Group ?\n\nChat ID/ Username: <code>{chat_id}</code>\nLast Message ID: <code>{last_msg_id}</code>',
+            reply_markup=reply_markup)
+
+    if type(chat_id) is int:
+        try:
+            link = (await bot.create_chat_invite_link(chat_id)).invite_link
+        except ChatAdminRequired:
+            return await message.reply('Make sure iam an admin in the chat and have permission to invite users.')
+    else:
+        link = f"@{message.forward_from_chat.username}"
     buttons = [
         [
-            InlineKeyboardButton("✅ Start Adding", callback_data="confirm_bulk_index"),
-            InlineKeyboardButton("❌ Cancel", callback_data="close_data")
+            InlineKeyboardButton('Accept Index',
+                                 callback_data=f'index#accept#{chat_id}#{last_msg_id}#{message.from_user.id}')
+        ],
+        [
+            InlineKeyboardButton('Reject Index',
+                                 callback_data=f'index#reject#{chat_id}#{message.id}#{message.from_user.id}'),
         ]
     ]
+    reply_markup = InlineKeyboardMarkup(buttons)
+    await bot.send_message(LOG_CHANNEL,
+                           f'#IndexRequest\n\nBy : {message.from_user.mention} (<code>{message.from_user.id}</code>)\nChat ID/ Username - <code> {chat_id}</code>\nLast Message ID - <code>{last_msg_id}</code>\nInviteLink - {link}',
+                           reply_markup=reply_markup)
+    await message.reply('ThankYou For the Contribution, Wait For My Moderators to verify the files.')
 
-    await message.reply_text(
-        text=f"📑 **Bulk Indexing Detected**\n\n"
-             f"📣 **Channel:** `{chat_title}`\n"
-             f"🆔 **Channel ID:** `{chat_id}`\n"
-             f"🔢 **Messages to Scan:** `1` to `{last_msg_id}`\n"
-             f"📊 **Total Estimated:** `{total_messages}`\n\n"
-             f"Do you want to index all media from this channel?",
-        reply_markup=InlineKeyboardMarkup(buttons),
-        quote=True
-    )
 
-@Client.on_callback_query(filters.regex(r"^confirm_bulk_index") & filters.user(ADMINS))
-async def start_indexing_callback(client, query: CallbackQuery):
-    user_id = query.from_user.id
-    data = INDEX_DATA.get(user_id)
-    
-    if not data:
-        return await query.answer("Session Expired! Forward the message again.", show_alert=True)
+@Client.on_message(filters.command('setskip') & filters.user(ADMINS))
+async def set_skip_number(bot, message):
+    if ' ' in message.text:
+        _, skip = message.text.split(" ")
+        try:
+            skip = int(skip)
+        except:
+            return await message.reply("Skip number should be an integer.")
+        await message.reply(f"Successfully set SKIP number as {skip}")
+        temp.CURRENT = int(skip)
+    else:
+        await message.reply("Give me a skip number")
 
-    await query.message.edit_text("🚀 **Indexing Started...**\nProcessing messages from ID 1.")
-    
-    chat_id = data['chat_id']
-    last_id = data['last_id']
-    
-    success = 0
-    duplicates = 0
+
+async def index_files_to_db(lst_msg_id, chat, msg, bot):
+    total_files = 0
+    duplicate = 0
     errors = 0
-    total_scanned = 0
-
-    # Using the iter_messages method defined in bot.py
-    async for message in client.iter_messages(chat_id, limit=last_id, offset=1):
-        total_scanned += 1
-        
-        # Only process media types supported by your database
-        if message.media in [enums.MessageMediaType.DOCUMENT, enums.MessageMediaType.VIDEO, enums.MessageMediaType.AUDIO]:
-            media_type = message.media.value
-            media = getattr(message, media_type)
-            media.file_type = media_type
-            media.caption = message.caption
-            
-            # Use the existing save_file function which handles duplicates
-            status, code = await save_file(media)
-            
-            if status:
-                success += 1
-            elif code == 0: # 0 indicates DuplicateKeyError in your ia_filterdb.py
-                duplicates += 1
-            else:
-                errors += 1
+    deleted = 0
+    no_media = 0
+    unsupported = 0
+    async with lock:
+        try:
+            current = temp.CURRENT
+            temp.CANCEL = False
+            async for message in bot.iter_messages(chat, lst_msg_id, temp.CURRENT):
+                if temp.CANCEL:
+                    await msg.edit(f"Successfully Cancelled!!\n\nSaved <code>{total_files}</code> files to dataBase!\nDuplicate Files Skipped: <code>{duplicate}</code>\nDeleted Messages Skipped: <code>{deleted}</code>\nNon-Media messages skipped: <code>{no_media + unsupported}</code>(Unsupported Media - `{unsupported}` )\nErrors Occurred: <code>{errors}</code>")
+                    break
+                current += 1
+                if current % 20 == 0:
+                    can = [[InlineKeyboardButton('Cancel', callback_data='index_cancel')]]
+                    reply = InlineKeyboardMarkup(can)
+                    await msg.edit_text(
+                        text=f"Total messages fetched: <code>{current}</code>\nTotal messages saved: <code>{total_files}</code>\nDuplicate Files Skipped: <code>{duplicate}</code>\nDeleted Messages Skipped: <code>{deleted}</code>\nNon-Media messages skipped: <code>{no_media + unsupported}</code>(Unsupported Media - `{unsupported}` )\nErrors Occurred: <code>{errors}</code>",
+                        reply_markup=reply)
+                if message.empty:
+                    deleted += 1
+                    continue
+                elif not message.media:
+                    no_media += 1
+                    continue
+                elif message.media not in [enums.MessageMediaType.VIDEO, enums.MessageMediaType.AUDIO, enums.MessageMediaType.DOCUMENT]:
+                    unsupported += 1
+                    continue
+                media = getattr(message, message.media.value, None)
+                if not media:
+                    unsupported += 1
+                    continue
+                media.file_type = message.media.value
+                media.caption = message.caption
+                aynav, vnay = await save_file(media)
+                if aynav:
+                    total_files += 1
+                elif vnay == 0:
+                    duplicate += 1
+                elif vnay == 2:
+                    errors += 1
+        except Exception as e:
+            logger.exception(e)
+            await msg.edit(f'Error: {e}')
         else:
-            errors += 1
-
-        # Periodic status updates to avoid spamming the Telegram API
-        if total_scanned % 50 == 0:
-            try:
-                await query.message.edit_text(
-                    f"🔄 **Indexing Progress...**\n\n"
-                    f"✅ Added: `{success}`\n"
-                    f"⏩ Skipped (Duplicate): `{duplicates}`\n"
-                    f"❌ Non-Media/Errors: `{errors}`\n"
-                    f"📊 Scanned: `{total_scanned}` / `{last_id}`"
-                )
-            except:
-                pass
-
-    # Final Summary
-    await query.message.reply_text(
-        text=f"🏁 **Indexing Completed!**\n\n"
-             f"✅ **Total Added:** `{success}`\n"
-             f"⏩ **Duplicates Found:** `{duplicates}`\n"
-             f"❌ **Invalid/Deleted:** `{errors}`\n"
-             f"📦 **Final Count:** `{success + duplicates}`",
-        quote=True
-    )
-    
-    # Cleanup session
-    INDEX_DATA.pop(user_id, None)
-    await query.answer("Bulk indexing finished successfully!")
-    
+            await msg.edit(f'Succesfully saved <code>{total_files}</code> to dataBase!\nDuplicate Files Skipped: <code>{duplicate}</code>\nDeleted Messages Skipped: <code>{deleted}</code>\nNon-Media messages skipped: <code>{no_media + unsupported}</code>(Unsupported Media - `{unsupported}` )\nErrors Occurred: <code>{errors}</code>')

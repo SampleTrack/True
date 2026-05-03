@@ -33,8 +33,22 @@ class Media(Document):
 
 
 async def save_file(media):
-    file_id, file_ref = unpack_new_file_id(media.file_id)
-    file_name = re.sub(r"@\w+|(_|\-|\.|\+)", " ", str(media.file_name))
+    try:
+        file_id, file_ref = unpack_new_file_id(media.file_id)
+    except Exception:
+        logger.exception('Invalid file_id')
+        return False, 2
+
+    # Clean filename, fallback to caption if filename is garbage
+    raw_name = str(getattr(media, 'file_name', '') or '')
+    caption = str(getattr(media, 'caption', '') or '')
+    file_name = re.sub(r"@\w+|(_|\-|\.|\+)", " ", raw_name).strip()
+    if len(file_name) < 5:
+        file_name = re.sub(r"@\w+|(_|\-|\.|\+)", " ", caption).strip()
+    if not file_name:
+        logger.warning('No valid file name or caption, skipping')
+        return False, 2
+
     try:
         file = Media(
             file_id=file_id,
@@ -42,20 +56,28 @@ async def save_file(media):
             file_name=file_name,
             file_size=media.file_size,
             file_type=media.file_type,
-            mime_type=media.mime_type
+            mime_type=media.mime_type,
+            caption=caption or None
         )
+        await file.commit()
+        logger.info(f'{file_name} saved')
+        return True, 1
+
+    except DuplicateKeyError:
+        existing = await Media.collection.find_one({'_id': file_id})
+        if existing and existing.get('caption') != (caption or None):
+            await Media.collection.update_one(
+                {'_id': file_id},
+                {'$set': {'caption': caption or None}}
+            )
+            logger.info(f'{file_name} caption updated')
+            return True, 3
+        logger.warning(f'{file_name} duplicate skipped')
+        return False, 0
+
     except ValidationError:
-        logger.exception('Error Occurred While Saving File In Database')
+        logger.exception(f'{file_name} validation error')
         return False, 2
-    else:
-        try:
-            await file.commit()
-        except DuplicateKeyError:      
-            logger.warning(str(getattr(media, "file_name", "NO FILE NAME")) + " is already saved in database")
-            return False, 0
-        else:
-            logger.info(str(getattr(media, "file_name", "NO FILE NAME")) + " is saved in database")
-            return True, 1
 
     
 async def get_search_results(query, file_type=None, max_results=10, offset=0, filter=False):

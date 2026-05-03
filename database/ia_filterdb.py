@@ -64,21 +64,6 @@ async def save_file(media):
             logger.info(f'{getattr(media, "file_name", "NO_FILE")} is saved to database')
             return True, 1
 
-    except DuplicateKeyError:
-        existing = await Media.collection.find_one({'_id': file_id})
-        if existing and existing.get('caption') != (caption or None):
-            await Media.collection.update_one(
-                {'_id': file_id},
-                {'$set': {'caption': caption or None}}
-            )
-            logger.info(f'{file_name} caption updated')
-            return True, 3
-        logger.warning(f'{file_name} duplicate skipped')
-        return False, 0
-
-    except ValidationError:
-        logger.exception(f'{file_name} validation error')
-        return False, 2
 
     
 async def get_search_results(query, file_type=None, max_results=10, offset=0, filter=False):

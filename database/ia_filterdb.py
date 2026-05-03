@@ -13,7 +13,6 @@ from info import DATABASE_URI, DATABASE_NAME, COLLECTION_NAME, USE_CAPTION_FILTE
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-#some basic variables needed
 saveMedia = None
 client = AsyncIOMotorClient(DATABASE_URI)
 db = client[DATABASE_NAME]

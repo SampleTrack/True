@@ -19,7 +19,7 @@ instance = Instance.from_db(db)
 
 @instance.register
 class Media(Document):
-    file_id = fields.StrField(attribute='id')
+    file_id = fields.StrField(attribute='_id')
     file_ref = fields.StrField(allow_none=True)
     file_name = fields.StrField(required=True)
     file_size = fields.IntField(required=True)
@@ -33,22 +33,11 @@ class Media(Document):
 
 
 async def save_file(media):
-    try:
-        file_id, file_ref = unpack_new_file_id(media.file_id)
-    except Exception:
-        logger.exception('Invalid file_id')
-        return False, 2
+    """Save file in database"""
 
-    # Clean filename, fallback to caption if filename is garbage
-    raw_name = str(getattr(media, 'file_name', '') or '')
-    caption = str(getattr(media, 'caption', '') or '')
-    file_name = re.sub(r"@\w+|(_|\-|\.|\+)", " ", raw_name).strip()
-    if len(file_name) < 5:
-        file_name = re.sub(r"@\w+|(_|\-|\.|\+)", " ", caption).strip()
-    if not file_name:
-        logger.warning('No valid file name or caption, skipping')
-        return False, 2
-
+    # TODO: Find better way to get same file_id for same media to avoid duplicates
+    file_id, file_ref = unpack_new_file_id(media.file_id)
+    file_name = re.sub(r"(_|\-|\.|\+)", " ", str(media.file_name))
     try:
         file = Media(
             file_id=file_id,
@@ -57,11 +46,23 @@ async def save_file(media):
             file_size=media.file_size,
             file_type=media.file_type,
             mime_type=media.mime_type,
-            caption=caption or None
+            caption=media.caption.html if media.caption else None,
         )
-        await file.commit()
-        logger.info(f'{file_name} saved')
-        return True, 1
+    except ValidationError:
+        logger.exception('Error occurred while saving file in database')
+        return False, 2
+    else:
+        try:
+            await file.commit()
+        except DuplicateKeyError:      
+            logger.warning(
+                f'{getattr(media, "file_name", "NO_FILE")} is already saved in database'
+            )
+
+            return False, 0
+        else:
+            logger.info(f'{getattr(media, "file_name", "NO_FILE")} is saved to database')
+            return True, 1
 
     except DuplicateKeyError:
         existing = await Media.collection.find_one({'_id': file_id})

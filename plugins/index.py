@@ -19,66 +19,85 @@ lock = asyncio.Lock()
 
 @Client.on_callback_query(filters.regex(r'^index'))
 async def index_files(bot, query):
-    logger.info(f"Index callback received: {query.data} from {query.from_user.id}")
+    print(f"✅ CALLBACK TRIGGERED: {query.data}")
+    logger.info(f"✅ CALLBACK TRIGGERED: {query.data}")
+    
+    try:
+        await query.answer("Received! Processing...", show_alert=True)
+    except Exception as e:
+        print(f"❌ query.answer failed: {e}")
 
     if query.data.startswith('index_cancel'):
         temp.CANCEL = True
         return await query.answer("Cancelling Indexing")
 
-    # ✅ Validate callback data parts
     parts = query.data.split("#")
+    print(f"Parts: {parts} | Length: {len(parts)}")
+    
     if len(parts) != 5:
-        logger.error(f"Invalid callback data format: {query.data}")
-        return await query.answer("Invalid callback data. Please try again.", show_alert=True)
+        print(f"❌ Invalid parts length: {len(parts)}")
+        return await query.message.edit(f"❌ Invalid callback data: {query.data}")
 
     _, raju, chat, lst_msg_id, from_user = parts
+    print(f"raju={raju} | chat={chat} | lst_msg_id={lst_msg_id} | from_user={from_user}")
 
     if raju == 'reject':
-        await query.message.delete()
-        await bot.send_message(
-            int(from_user),
-            f'Your Submission for indexing {chat} has been declined by our moderators.',
-            reply_to_message_id=int(lst_msg_id)
-        )
+        try:
+            await query.message.delete()
+            await bot.send_message(
+                int(from_user),
+                f'Your Submission for indexing {chat} has been declined by our moderators.',
+            )
+        except Exception as e:
+            print(f"❌ Reject error: {e}")
         return
 
+    print(f"Lock locked: {lock.locked()}")
     if lock.locked():
         return await query.answer('Wait until previous process completes.', show_alert=True)
 
     msg = query.message
-    await query.answer('Processing...⏳', show_alert=True)
 
-    if int(from_user) not in ADMINS:
-        await bot.send_message(
-            int(from_user),
-            f'Your Submission for indexing {chat} has been accepted by our moderators and will be added soon.',
-            reply_to_message_id=int(lst_msg_id)
+    try:
+        if int(from_user) not in ADMINS:
+            await bot.send_message(
+                int(from_user),
+                f'Your Submission for indexing {chat} has been accepted.',
+            )
+    except Exception as e:
+        print(f"❌ Send message to user error: {e}")
+
+    try:
+        await msg.edit(
+            "⏳ Starting Indexing...",
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton('Cancel ❌', callback_data='index_cancel')]]
+            )
         )
+        print("✅ msg.edit successful")
+    except Exception as e:
+        print(f"❌ msg.edit failed: {e}")
 
-    await msg.edit(
-        "Starting Indexing",
-        reply_markup=InlineKeyboardMarkup(
-            [[InlineKeyboardButton('Cancel', callback_data='index_cancel')]]
-        )
-    )
-
-    # ✅ Safely convert chat and lst_msg_id
     try:
         chat = int(chat)
+        print(f"✅ chat converted to int: {chat}")
     except ValueError:
-        pass  # keep as string username
+        print(f"chat kept as string: {chat}")
 
     try:
         lst_msg_id = int(lst_msg_id)
-    except ValueError:
-        logger.error(f"Invalid lst_msg_id: {lst_msg_id}")
-        return await msg.edit("❌ Error: Invalid message ID in callback data.")
+        print(f"✅ lst_msg_id converted: {lst_msg_id}")
+    except ValueError as e:
+        print(f"❌ lst_msg_id conversion failed: {e}")
+        return await msg.edit(f"❌ Invalid message ID: {lst_msg_id}")
 
-    # ✅ Wrapped with proper error handling
+    print(f"🚀 Calling index_files_to_db with chat={chat}, lst_msg_id={lst_msg_id}")
     try:
         await index_files_to_db(lst_msg_id, chat, msg, bot)
+        print("✅ index_files_to_db completed")
     except Exception as e:
-        logger.exception(f"Fatal error during indexing: {e}")
+        print(f"❌ index_files_to_db crashed: {e}")
+        logger.exception(e)
         await msg.edit(f"❌ Fatal Error: {e}")
 
 
@@ -277,4 +296,5 @@ async def index_files_to_db(lst_msg_id, chat, msg, bot):
     except asyncio.TimeoutError:
         logger.error("Indexing timed out after 1 hour.")
         await msg.edit("❌ Indexing timed out after 1 hour. Please try again with fewer messages.")
+        
         

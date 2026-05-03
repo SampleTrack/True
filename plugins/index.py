@@ -14,39 +14,51 @@ logger.setLevel(logging.INFO)
 lock = asyncio.Lock()
 
 
-@Client.on_callback_query(filters.regex(r'^index'))
+@Client.on_callback_query(filters.regex(r'^index_'))
 async def index_files(bot, query):
     if query.data.startswith('index_cancel'):
         temp.CANCEL = True
         return await query.answer("Cancelling Indexing")
-    _, raju, chat, lst_msg_id, from_user = query.data.split("#")
-    if raju == 'reject':
+    
+    # Split using the new prefix logic
+    data = query.data.split("#")
+    action = data[0] # index_accept or index_reject
+    chat = data[1]
+    lst_msg_id = data[2]
+    from_user = data[3]
+
+    if action == 'index_reject':
         await query.message.delete()
         await bot.send_message(int(from_user),
-                               f'Your Submission for indexing {chat} has been decliened by our moderators.',
+                               f'Your Submission for indexing {chat} has been declined by our moderators.',
                                reply_to_message_id=int(lst_msg_id))
         return
 
+    # Logic for index_accept
     if lock.locked():
         return await query.answer('Wait until previous process complete.', show_alert=True)
-    msg = query.message
 
     await query.answer('Processing...⏳', show_alert=True)
+    
     if int(from_user) not in ADMINS:
         await bot.send_message(int(from_user),
-                               f'Your Submission for indexing {chat} has been accepted by our moderators and will be added soon.',
+                               f'Your Submission for indexing {chat} has been accepted and will be added soon.',
                                reply_to_message_id=int(lst_msg_id))
-    await msg.edit(
-        "Starting Indexing",
+    
+    await query.message.edit(
+        "Starting Indexing...",
         reply_markup=InlineKeyboardMarkup(
             [[InlineKeyboardButton('Cancel', callback_data='index_cancel')]]
         )
     )
+    
     try:
-        chat = int(chat)
-    except:
-        chat = chat
-    await index_files_to_db(int(lst_msg_id), chat, msg, bot)
+        chat_id = int(chat) if chat.strip('-').isdigit() else chat
+        await index_files_to_db(int(lst_msg_id), chat_id, query.message, bot)
+    except Exception as e:
+        logger.exception(e)
+        await query.message.edit(f"Error: {e}")
+
 
 
 @Client.on_message((filters.forwarded | (filters.regex("(https://)?(t\.me/|telegram\.me/|telegram\.dog/)(c/)?(\d+|[a-zA-Z_0-9]+)/(\d+)$")) & filters.text) & filters.private & filters.incoming)

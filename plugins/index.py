@@ -22,6 +22,30 @@ logger.setLevel(logging.INFO)
 lock = asyncio.Lock()
 
 
+# ─── TEST CALLBACK HANDLER ────────────────────────────────────────────────────
+
+@Client.on_callback_query(filters.regex(r'^cb_test'))
+async def test_callback(bot, query):
+    data = query.data  # e.g. "cb_test#ping"
+    parts = data.split("#")
+    tag = parts[1] if len(parts) > 1 else "unknown"
+
+    await query.answer(f"✅ Callback working! Tag: {tag}", show_alert=True)
+    await query.message.edit_text(
+        f"<b>✅ Callback Test Passed</b>\n\n"
+        f"<b>Received Data:</b> <code>{data}</code>\n"
+        f"<b>Tag:</b> <code>{tag}</code>\n"
+        f"<b>User ID:</b> <code>{query.from_user.id}</code>\n"
+        f"<b>Chat ID:</b> <code>{query.message.chat.id}</code>",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔄 Test Again", callback_data="cb_test#ping")],
+            [InlineKeyboardButton("❌ Close", callback_data="close_data")],
+        ])
+    )
+
+
+# ─── INDEX CALLBACK HANDLER ───────────────────────────────────────────────────
+
 @Client.on_callback_query(filters.regex(r'^index'))
 async def index_files(bot, query):
     if query.data.startswith('index_cancel'):
@@ -64,6 +88,8 @@ async def index_files(bot, query):
 
         await index_files_to_db(int(lst_msg_id), chat, msg, bot)
 
+
+# ─── SEND FOR INDEX ───────────────────────────────────────────────────────────
 
 @Client.on_message(
     (
@@ -125,10 +151,14 @@ async def send_for_index(bot, message):
     if message.from_user.id in ADMINS:
         buttons = [
             [InlineKeyboardButton(
-                'Yes',
+                '✅ Yes, Index',
                 callback_data=f'index#accept#{chat_id}#{last_msg_id}#{message.from_user.id}',
             )],
-            [InlineKeyboardButton('Close', callback_data='close_data')],
+            [InlineKeyboardButton(
+                '🧪 Test Callback',
+                callback_data='cb_test#admin_index_check',
+            )],
+            [InlineKeyboardButton('❌ Close', callback_data='close_data')],
         ]
         return await message.reply(
             f'Do you want to index this channel/group?\n\n'
@@ -149,12 +179,16 @@ async def send_for_index(bot, message):
 
     buttons = [
         [InlineKeyboardButton(
-            'Accept Index',
+            '✅ Accept Index',
             callback_data=f'index#accept#{chat_id}#{last_msg_id}#{message.from_user.id}',
         )],
         [InlineKeyboardButton(
-            'Reject Index',
+            '❌ Reject Index',
             callback_data=f'index#reject#{chat_id}#{message.id}#{message.from_user.id}',
+        )],
+        [InlineKeyboardButton(
+            '🧪 Test Callback',
+            callback_data='cb_test#moderator_index_check',
         )],
     ]
 
@@ -170,6 +204,8 @@ async def send_for_index(bot, message):
     await message.reply('Thank you for the contribution! Please wait for our moderators to verify the files.')
 
 
+# ─── SET SKIP COMMAND ─────────────────────────────────────────────────────────
+
 @Client.on_message(filters.command('setskip') & filters.user(ADMINS))
 async def set_skip_number(bot, message):
     if ' ' not in message.text:
@@ -184,6 +220,8 @@ async def set_skip_number(bot, message):
     temp.CURRENT = skip
     await message.reply(f"Successfully set SKIP number to {skip}.")
 
+
+# ─── INDEX FILES TO DB ────────────────────────────────────────────────────────
 
 async def index_files_to_db(lst_msg_id, chat, msg, bot):
     total_files = 0
@@ -202,7 +240,7 @@ async def index_files_to_db(lst_msg_id, chat, msg, bot):
                 if temp.CANCEL:
                     await msg.edit(
                         f"Indexing cancelled.\n\n"
-                        f"Saved: <code>{total_files}</code> files\n"
+                        f"Files saved: <code>{total_files}</code>\n"
                         f"Duplicates skipped: <code>{duplicate}</code>\n"
                         f"Deleted messages skipped: <code>{deleted}</code>\n"
                         f"Non-media skipped: <code>{no_media + unsupported}</code> "
@@ -266,12 +304,12 @@ async def index_files_to_db(lst_msg_id, chat, msg, bot):
             await msg.edit(f'Error: {e}')
         else:
             await msg.edit(
-                f"Indexing complete!\n\n"
+                f"✅ Indexing complete!\n\n"
                 f"Files saved: <code>{total_files}</code>\n"
                 f"Duplicates skipped: <code>{duplicate}</code>\n"
                 f"Deleted messages skipped: <code>{deleted}</code>\n"
                 f"Non-media skipped: <code>{no_media + unsupported}</code> "
                 f"(Unsupported: <code>{unsupported}</code>)\n"
                 f"Errors: <code>{errors}</code>"
-    )
+        )
             

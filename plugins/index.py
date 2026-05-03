@@ -130,10 +130,11 @@ async def set_skip_number(bot, message):
     await message.reply(f"Successfully set SKIP number to {skip}.")
 
 
-def _build_status_text(current, total_files, duplicate, deleted, no_media, unsupported, errors):
+def _build_status_text(current, total_files, caption_updated, duplicate, deleted, no_media, unsupported, errors):
     return (
         f"Messages fetched: <code>{current}</code>\n"
         f"Files saved: <code>{total_files}</code>\n"
+        f"Caption updated: <code>{caption_updated}</code>\n"
         f"Duplicates skipped: <code>{duplicate}</code>\n"
         f"Deleted messages skipped: <code>{deleted}</code>\n"
         f"Non-media skipped: <code>{no_media + unsupported}</code> "
@@ -143,7 +144,7 @@ def _build_status_text(current, total_files, duplicate, deleted, no_media, unsup
 
 
 async def index_files_to_db(lst_msg_id, chat, msg, bot):
-    total_files = duplicate = errors = deleted = no_media = unsupported = 0
+    total_files = duplicate = errors = deleted = no_media = unsupported = caption_updated = 0
     cancel_markup = InlineKeyboardMarkup([[InlineKeyboardButton('Cancel', callback_data='index_cancel')]])
     async with lock:
         try:
@@ -153,13 +154,13 @@ async def index_files_to_db(lst_msg_id, chat, msg, bot):
                 if temp.CANCEL:
                     await msg.edit(
                         "Indexing cancelled!\n\n" +
-                        _build_status_text(current, total_files, duplicate, deleted, no_media, unsupported, errors)
+                        _build_status_text(current, total_files, caption_updated, duplicate, deleted, no_media, unsupported, errors)
                     )
                     return
                 current += 1
                 if current % 20 == 0:
                     await msg.edit_text(
-                        _build_status_text(current, total_files, duplicate, deleted, no_media, unsupported, errors),
+                        _build_status_text(current, total_files, caption_updated, duplicate, deleted, no_media, unsupported, errors),
                         reply_markup=cancel_markup
                     )
                 if message.empty:
@@ -178,8 +179,10 @@ async def index_files_to_db(lst_msg_id, chat, msg, bot):
                 media.file_type = message.media.value
                 media.caption = message.caption
                 saved, status = await save_file(media)
-                if saved:
+                if status == 1:
                     total_files += 1
+                elif status == 3:
+                    caption_updated += 1
                 elif status == 0:
                     duplicate += 1
                 elif status == 2:
@@ -190,6 +193,6 @@ async def index_files_to_db(lst_msg_id, chat, msg, bot):
         else:
             await msg.edit(
                 "Indexing complete!\n\n" +
-                _build_status_text(current, total_files, duplicate, deleted, no_media, unsupported, errors)
-            )
+                _build_status_text(current, total_files, caption_updated, duplicate, deleted, no_media, unsupported, errors)
+    )
             

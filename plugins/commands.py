@@ -124,10 +124,11 @@ async def start(client, message):
         try:
             await client.send_message(
                 chat_id=message.from_user.id,
-                text=FORCE_SUB_TEXT,
+                text=script.FORCE_SUB_TEXT,
                 reply_markup=InlineKeyboardMarkup(btn),
                 parse_mode=enums.ParseMode.MARKDOWN
             )
+            return
             return
         except Exception as e:
             logger.error(f"Force Sub Display Error: {e}")

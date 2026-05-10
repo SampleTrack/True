@@ -30,9 +30,45 @@ SPELL_CHECK = {}
 @Client.on_message(filters.group & filters.text & filters.incoming)
 async def give_filter(client, message):
     await db.track_user_activity(
-        message.from_user.id, 
+        message.from_user.id,
         message.from_user.first_name or "User"
     )
+
+    if not message.text:
+        return
+
+    text = message.text.strip().lower()
+
+    if len(text) < 3:
+        return
+
+    if text.startswith(("/", "!", ".", ",")):
+        return
+
+    if "http://" in text or "https://" in text:
+        return
+
+    IGNORE_TEXTS = {
+        "hi", "hello", "ok", "hmm",
+        "thanks", "thank you",
+        "good morning", "good night",
+        "yes", "no", "lol"
+    }
+
+    if text in IGNORE_TEXTS:
+        return
+
+    BAD_PATTERNS = ["@", "#", "www.", ".com"]
+
+    if any(x in text for x in BAD_PATTERNS):
+        return
+
+    search = re.sub(r'[^a-zA-Z0-9 ]', '', text)
+    search = " ".join(search.split())
+
+    if not search:
+        return
+
     await auto_filter(client, message)
 
 

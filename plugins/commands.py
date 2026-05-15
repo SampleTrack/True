@@ -16,7 +16,6 @@ from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from database.ia_filterdb import Media, get_file_details, unpack_new_file_id
 from database.users_chats_db import db
-from database.connections_mdb import active_connection
 
 from info import (
     CHANNELS, ADMINS, AUTH_CHANNEL, UPDATE_CHANNEL,

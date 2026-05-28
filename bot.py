@@ -1,7 +1,6 @@
 import logging
 import logging.config
 
-# Get logging configurations
 logging.config.fileConfig('logging.conf')
 logging.getLogger().setLevel(logging.INFO)
 logging.getLogger("pyrogram").setLevel(logging.ERROR)
@@ -15,12 +14,13 @@ from database.users_chats_db import db
 from info import SESSION, API_ID, API_HASH, BOT_TOKEN, LOG_STR, PORT, LOG_CHANNEL
 from utils import temp
 from aiohttp import web
-from datetime import date, datetime 
+from datetime import date, datetime
 import pytz
-from Script import script 
+from Script import script
 from plugins import web_server
 from typing import Union, Optional, AsyncGenerator
 from pyrogram import types
+
 
 class Bot(Client):
 
@@ -39,7 +39,6 @@ class Bot(Client):
         b_users, b_chats = await db.get_banned()
         temp.BANNED_USERS = b_users
         temp.BANNED_CHATS = b_chats
-        # Load maintenance state
         temp.MAINTENANCE_MODE = await db.get_maintenance()
         await super().start()
         await Media.ensure_indexes()
@@ -59,10 +58,9 @@ class Bot(Client):
         await app.setup()
         bind_address = "0.0.0.0"
         await web.TCPSite(app, bind_address, PORT).start()
+        # FIX: run as background task so it does not block startup
+        asyncio.create_task(self.send_report_message())
 
-        # Add a job to send a message at 11:59 PM daily
-        await self.send_report_message()
-    
     async def send_report_message(self):
         while True:
             tz = pytz.timezone('Asia/Kolkata')
@@ -74,23 +72,24 @@ class Bot(Client):
 
             total_users = await db.total_users_count()
             total_chats = await db.total_chat_count()
-            today_users = await db.daily_users_count(today) + 1
-            today_chats = await db.daily_chats_count(today) + 1
-            
+            # FIX: removed incorrect +1 from daily counts
+            today_users = await db.daily_users_count(today)
+            today_chats = await db.daily_chats_count(today)
+
             status = await db.get_bot_status()
             daily_active_users = status['daily_active_users']
             active_users_percentage = status['active_user_percentage']
 
             if now.hour == 23 and now.minute == 59:
                 k = await self.send_message(
-                    chat_id=LOG_CHANNEL, 
+                    chat_id=LOG_CHANNEL,
                     text=script.REPORT_TXT.format(
                         a=formatted_date_1,
                         b=formatted_date_2,
                         c=time,
-                        d=total_users, 
+                        d=total_users,
                         e=total_chats,
-                        f=today_users, 
+                        f=today_users,
                         g=today_chats,
                         h=daily_active_users,
                         i=active_users_percentage,
@@ -98,49 +97,28 @@ class Bot(Client):
                     )
                 )
                 await k.pin()
-                await asyncio.sleep(120) 
+                await asyncio.sleep(120)
             else:
                 await asyncio.sleep(30)
-                
+
     async def stop(self, *args):
         await super().stop()
         logging.info("Bot stopped. Bye.")
-    
+
     async def iter_messages(
         self,
         chat_id: Union[int, str],
         limit: int,
         offset: int = 0,
     ) -> Optional[AsyncGenerator["types.Message", None]]:
-        """Iterate through a chat sequentially.
-        This convenience method does the same as repeatedly calling :meth:`~pyrogram.Client.get_messages` in a loop, thus saving
-        you from the hassle of setting up boilerplate code. It is useful for getting the whole chat messages with a
-        single call.
-        Parameters:
-            chat_id (``int`` | ``str``):
-                Unique identifier (int) or username (str) of the target chat.
-                For your personal cloud (Saved Messages) you can simply use "me" or "self".
-                For a contact that exists in your Telegram address book you can use his phone number (str).
-                
-            limit (``int``):
-                Identifier of the last message to be returned.
-                
-            offset (``int``, *optional*):
-                Identifier of the first message to be returned.
-                Defaults to 0.
-        Returns:
-            ``Generator``: A generator yielding :obj:`~pyrogram.types.Message` objects.
-        Example:
-            .. code-block:: python
-                for message in app.iter_messages("pyrogram", 1, 15000):
-                    print(message.text)
-        """
+        """Iterate through a chat sequentially."""
         current = offset
         while True:
             new_diff = min(200, limit - current)
             if new_diff <= 0:
                 return
-            messages = await self.get_messages(chat_id, list(range(current, current+new_diff+1)))
+            # FIX: range should be current to current+new_diff (exclusive end)
+            messages = await self.get_messages(chat_id, list(range(current, current + new_diff)))
             for message in messages:
                 yield message
                 current += 1

@@ -151,6 +151,7 @@ async def check_user_cmd(bot, message):
 
 @Client.on_callback_query(filters.regex(r"^ban_suspicious#") & filters.user(ADMINS))
 async def ban_suspicious_cb(bot, query):
+    await query.answer()
     user_id = int(query.data.split("#")[1])
     await db.ban_user(user_id, "Suspicious activity — auto-flagged")
     await query.message.edit_text(f"🚫 User <code>{user_id}</code> has been banned.")
@@ -160,6 +161,7 @@ async def ban_suspicious_cb(bot, query):
 
 @Client.on_callback_query(filters.regex(r"^clear_check#") & filters.user(ADMINS))
 async def clear_check_cb(bot, query):
+    await query.answer()
     await query.message.edit_text("✅ User check cleared. No action taken.")
 
 

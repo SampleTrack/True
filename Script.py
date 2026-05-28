@@ -122,7 +122,7 @@ Yesterday
 {b} Users = <code>{f}</code>
 {b} Chats = <code>{g}</code>
 
-Yesterday
+Daily Active
 {b} Active Users = <code>{h}</code>
 {b} Active users Percentage = <code>{i}</code>
 

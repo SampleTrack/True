@@ -31,6 +31,8 @@ async def users_broadcast(bot, message):
     start_time = time.time()
     total_users = await db.total_users_count()
     done, failed, success = 0, 0, 0
+    # FIX: initialise time_taken so final edit works even if cursor is empty
+    time_taken = "0s"
 
     async with lock:
         async for user in users:
@@ -65,6 +67,8 @@ async def groups_broadcast(bot, message):
     start_time = time.time()
     total_chats = await db.total_chat_count()
     done, failed, success = 0, 0, 0
+    # FIX: initialise time_taken so final edit works even if cursor is empty
+    time_taken = "0s"
 
     async with lock:
         async for chat in chats:
@@ -121,4 +125,4 @@ def get_readable_time(seconds):
         if seconds >= period_seconds:
             period_value, seconds = divmod(seconds, period_seconds)
             result += f'{int(period_value)}{period_name}'
-    return result
+    return result or '0s'

@@ -72,6 +72,7 @@ async def give_filter(client, message):
 
 @Client.on_callback_query(filters.regex(r"^next"))
 async def next_page(bot, query):
+    await query.answer()
     ident, req, key, offset = query.data.split("_")
     if int(req) not in [query.from_user.id, 0]:
         return await query.answer("oKda", show_alert=True)
@@ -157,6 +158,7 @@ async def next_page(bot, query):
 
 @Client.on_callback_query(filters.regex(r"^spolling"))
 async def advantage_spoll_choker(bot, query):
+    await query.answer()
     _, user, movie_ = query.data.split('#')
     if int(user) != 0 and query.from_user.id != int(user):
         return await query.answer("okDa", show_alert=True)
@@ -179,6 +181,7 @@ async def advantage_spoll_choker(bot, query):
 
 @Client.on_callback_query(group=1)
 async def cb_handler(client: Client, query: CallbackQuery):
+    await query.answer()
     if query.data == "close_data":
         await query.message.delete()
     if query.data.startswith("file"):

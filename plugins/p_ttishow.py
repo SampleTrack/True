@@ -1,3 +1,4 @@
+import random
 from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from pyrogram.errors.exceptions.bad_request_400 import MessageTooLong, PeerIdInvalid
@@ -74,7 +75,7 @@ async def save_group(bot, message):
 
                 mention = message.from_user.mention if message.from_user else message.chat.title
                 temp.MELCOW['welcome'] = await message.reply_photo(
-                    photo=MELCOW_PIC,
+                    photo=random.choice(MELCOW_PIC),
                     caption=script.MELCOW_ENG.format(a=mention, b=message.chat.title),
                     reply_markup=InlineKeyboardMarkup(
                         [
@@ -93,8 +94,7 @@ async def save_group(bot, message):
                 date = now.date()
                 total_members = await bot.get_chat_members_count(message.chat.id)
     
-                for member in new_members:
-                    await bot.send_message(LOG_CHANNEL, script.NEW_MEMBER.format(a=message.chat.title, b=message.chat.id, c=message.chat.username, d=total_members, e=invite_link, f=message.from_user.mention, g=message.from_user.id, h=message.from_user.username, i=date, j=time, k=temp.U_NAME), disable_web_page_preview=True)
+                await bot.send_message(LOG_CHANNEL, script.NEW_MEMBER.format(a=message.chat.title, b=message.chat.id, c=message.chat.username, d=total_members, e=invite_link, f=message.from_user.mention, g=message.from_user.id, h=message.from_user.username, i=date, j=time, k=temp.U_NAME), disable_web_page_preview=True)
         else:
             # Log new members joining the group
             tz = pytz.timezone('Asia/Kolkata')

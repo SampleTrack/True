@@ -21,19 +21,16 @@ from bs4 import BeautifulSoup
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-
-
 imdb = IMDb() 
 
 TOKENS = {}
 VERIFIED = {}
 URLINK = {}
 BANNED = {}
-SMART_OPEN = '“'
-SMART_CLOSE = '”'
+SMART_OPEN = '\u201c'
+SMART_CLOSE = '\u201d'
 START_CHAR = ('\'', '"', SMART_OPEN)
 
-# temp db for banned 
 class temp(object):
     BANNED_USERS = []
     BANNED_CHATS = []
@@ -51,18 +48,21 @@ class temp(object):
     ACTIVE_URL = {}
     TOKEN_ACCEPTED = {}
     STORE_ID = {}
-    # ADD THIS:
     MAINTENANCE_MODE = False
     
 async def add_new_user(client, user):
     tz = pytz.timezone('Asia/Kolkata')
     now = datetime.now(tz)
     today = now.date()
-    time = now.strftime('%I:%M:%S %p')
-    total_users = await db.total_users_count() + 1
-    daily_users = await db.daily_users_count(today) + 1
+    time_str = now.strftime('%I:%M:%S %p')
+    total_users = await db.total_users_count()
+    # FIX: removed incorrect +1; DB count is accurate as-is
+    daily_users = await db.daily_users_count(today)
     await db.add_user(user.id, user.first_name)
-    await client.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(a=user.id, b=user.mention, c=user.username, d=total_users, e=daily_users, f=str(today), g=time, h=temp.U_NAME))
+    await client.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(
+        a=user.id, b=user.mention, c=user.username,
+        d=total_users, e=daily_users, f=str(today), g=time_str, h=temp.U_NAME
+    ))
 
 def extract_commands(file_path):
     commands = []
@@ -87,7 +87,6 @@ async def is_subscribed(bot, query):
 
 async def get_poster(query, bulk=False, id=False, file=None):
     if not id:
-        # https://t.me/GetTGLink/4183
         query = (query.strip()).lower()
         title = query
         year = re.findall(r'[1-2]\d{3}$', query, re.IGNORECASE)
@@ -104,12 +103,12 @@ async def get_poster(query, bulk=False, id=False, file=None):
         if not movieid:
             return None
         if year:
-            filtered=list(filter(lambda k: str(k.get('year')) == str(year), movieid))
+            filtered = list(filter(lambda k: str(k.get('year')) == str(year), movieid))
             if not filtered:
                 filtered = movieid
         else:
             filtered = movieid
-        movieid=list(filter(lambda k: k.get('kind') in ['movie', 'tv series'], filtered))
+        movieid = list(filter(lambda k: k.get('kind') in ['movie', 'tv series'], filtered))
         if not movieid:
             movieid = filtered
         if bulk:
@@ -119,11 +118,11 @@ async def get_poster(query, bulk=False, id=False, file=None):
         movieid = query
     movie = imdb.get_movie(movieid)
     if movie.get("original air date"):
-        date = movie["original air date"]
+        date_val = movie["original air date"]
     elif movie.get("year"):
-        date = movie.get("year")
+        date_val = movie.get("year")
     else:
-        date = "N/A"
+        date_val = "N/A"
     plot = ""
     if not LONG_IMDB_DESCRIPTION:
         plot = movie.get('plot')
@@ -149,19 +148,19 @@ async def get_poster(query, bulk=False, id=False, file=None):
         "certificates": list_to_str(movie.get("certificates")),
         "languages": list_to_str(movie.get("languages")),
         "director": list_to_str(movie.get("director")),
-        "writer":list_to_str(movie.get("writer")),
-        "producer":list_to_str(movie.get("producer")),
-        "composer":list_to_str(movie.get("composer")) ,
-        "cinematographer":list_to_str(movie.get("cinematographer")),
+        "writer": list_to_str(movie.get("writer")),
+        "producer": list_to_str(movie.get("producer")),
+        "composer": list_to_str(movie.get("composer")),
+        "cinematographer": list_to_str(movie.get("cinematographer")),
         "music_team": list_to_str(movie.get("music department")),
         "distributors": list_to_str(movie.get("distributors")),
-        'release_date': date,
+        'release_date': date_val,
         'year': movie.get('year'),
         'genres': list_to_str(movie.get("genres")),
         'poster': movie.get('full-size cover url'),
         'plot': plot,
         'rating': str(movie.get("rating")),
-        'url':f'https://www.imdb.com/title/tt{movieid}'
+        'url': f'https://www.imdb.com/title/tt{movieid}'
     }
 
 
@@ -172,7 +171,6 @@ async def search_gagala(text):
     }
     text = text.replace(" ", '+')
     url = f'https://www.google.com/search?q={text}'
-    
     try:
         async with aiohttp.ClientSession(headers=usr_agent) as session:
             async with session.get(url, raise_for_status=True) as response:
@@ -199,28 +197,21 @@ async def save_group_settings(group_id, key, value):
     
 def get_size(size):
     """Get size in readable format"""
-
     units = ["Bytes", "KB", "MB", "GB", "TB", "PB", "EB"]
     size = float(size)
     i = 0
-    while size >= 1024.0 and i < len(units):
+    # FIX: use len(units) - 1 to prevent IndexError on very large sizes
+    while size >= 1024.0 and i < len(units) - 1:
         i += 1
         size /= 1024.0
     return "%.2f %s" % (size, units[i])
 
 
-
 def get_file_id(msg: Message):
     if msg.media:
         for message_type in (
-            "photo",
-            "animation",
-            "audio",
-            "document",
-            "video",
-            "video_note",
-            "voice",
-            "sticker"
+            "photo", "animation", "audio", "document",
+            "video", "video_note", "voice", "sticker"
         ):
             obj = getattr(msg, message_type)
             if obj:
@@ -229,25 +220,21 @@ def get_file_id(msg: Message):
                 
 def extract_user(message: Message) -> Union[int, str]:
     """extracts the user from a message"""
-    # https://github.com/SpEcHiDe/PyroGramBot/blob/f30e2cca12002121bad1982f68cd0ff9814ce027/pyrobot/helper_functions/extract_user.py#L7
     user_id = None
     user_first_name = None
     if message.reply_to_message:
         user_id = message.reply_to_message.from_user.id
         user_first_name = message.reply_to_message.from_user.first_name
-
     elif len(message.command) > 1:
         if (
             len(message.entities) > 1 and
             message.entities[1].type == enums.MessageEntityType.TEXT_MENTION
         ):
-           
             required_entity = message.entities[1]
             user_id = required_entity.user.id
             user_first_name = required_entity.user.first_name
         else:
             user_id = message.command[1]
-            # don't want to make a request -_-
             user_first_name = user_id
         try:
             user_id = int(user_id)
@@ -265,32 +252,26 @@ def list_to_str(k):
         return str(k[0])
     elif MAX_LIST_ELM:
         k = k[:int(MAX_LIST_ELM)]
-        return ' '.join(f'{elem}, ' for elem in k)
-    else:
-        return ' '.join(f'{elem}, ' for elem in k)
+    # FIX: proper comma-separated join without trailing comma
+    return ', '.join(str(elem) for elem in k)
 
 def last_online(from_user):
-    time = ""
+    time_str = ""
     if from_user.is_bot:
-        time += "🤖 Bot :("
+        time_str += "🤖 Bot :("
     elif from_user.status == enums.UserStatus.RECENTLY:
-        time += "Recently"
+        time_str += "Recently"
     elif from_user.status == enums.UserStatus.LAST_WEEK:
-        time += "Within the last week"
+        time_str += "Within the last week"
     elif from_user.status == enums.UserStatus.LAST_MONTH:
-        time += "Within the last month"
+        time_str += "Within the last month"
     elif from_user.status == enums.UserStatus.LONG_AGO:
-        time += "A long time ago :("
+        time_str += "A long time ago :("
     elif from_user.status == enums.UserStatus.ONLINE:
-        time += "Currently Online"
+        time_str += "Currently Online"
     elif from_user.status == enums.UserStatus.OFFLINE:
-        time += from_user.last_online_date.strftime("%a, %d %b %Y, %H:%M:%S")
-    return time
-
-
-
-
-
+        time_str += from_user.last_online_date.strftime("%a, %d %b %Y, %H:%M:%S")
+    return time_str
 
 
 def humanbytes(size):
@@ -298,8 +279,9 @@ def humanbytes(size):
         return ""
     power = 2**10
     n = 0
+    # FIX: cap at 4 (Ti) to prevent KeyError beyond dict range
     Dic_powerN = {0: ' ', 1: 'Ki', 2: 'Mi', 3: 'Gi', 4: 'Ti'}
-    while size > power:
+    while size > power and n < 4:
         size /= power
         n += 1
     return str(round(size, 2)) + " " + Dic_powerN[n] + 'B'
@@ -323,10 +305,14 @@ async def verify_user(bot, userid, token):
     user = await bot.get_users(int(userid))
     if not await db.is_user_exist(user.id):
         await db.add_user(user.id, user.first_name)
-        await bot.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(user.id, user.mention))
+        # FIX: use named args to match LOG_TEXT_P template placeholders
+        await bot.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(
+            a=user.id, b=user.mention, c=getattr(user, 'username', 'N/A'),
+            d='N/A', e='N/A', f='N/A', g='N/A', h=temp.U_NAME
+        ))
     TOKENS[user.id] = {token: True}
     tz = pytz.timezone('Asia/Kolkata')
-    date_var = datetime.now(tz)+timedelta(hours=12)
+    date_var = datetime.now(tz) + timedelta(hours=12)
     temp_time = date_var.strftime("%H:%M:%S")
     date_var, time_var = str(date_var).split(" ")
     await update_verify_status(bot, user.id, date_var, temp_time)
@@ -336,7 +322,11 @@ async def check_token(bot, userid, token):
     user = await bot.get_users(userid)
     if not await db.is_user_exist(user.id):
         await db.add_user(user.id, user.first_name)
-        await bot.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(user.id, user.mention))
+        # FIX: use named args to match LOG_TEXT_P template placeholders
+        await bot.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(
+            a=user.id, b=user.mention, c=getattr(user, 'username', 'N/A'),
+            d='N/A', e='N/A', f='N/A', g='N/A', h=temp.U_NAME
+        ))
     if user.id in TOKENS.keys():
         TKN = TOKENS[user.id]
         if token in TKN.keys():
@@ -345,10 +335,10 @@ async def check_token(bot, userid, token):
                 return False
             else:
                 return True
-    else:
-        return False
+    return False
 
 async def get_verify_shorted_link(num, link):
+    from info import SHORTLINK_API, SHORTLINK_URL, VERIFY2_API, VERIFY2_URL
     if int(num) == 1:
         API = SHORTLINK_API
         URL = SHORTLINK_URL
@@ -362,10 +352,7 @@ async def get_verify_shorted_link(num, link):
 
     if URL == "api.shareus.in":
         url = f"https://{URL}/shortLink"
-        params = {"token": API,
-                  "format": "json",
-                  "link": link,
-                  }
+        params = {"token": API, "format": "json", "link": link}
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, params=params, raise_for_status=True, ssl=False) as response:
@@ -375,15 +362,12 @@ async def get_verify_shorted_link(num, link):
                     else:
                         logger.error(f"Error: {data['message']}")
                         return f'https://{URL}/shortLink?token={API}&format=json&link={link}'
-
         except Exception as e:
             logger.error(e)
             return f'https://{URL}/shortLink?token={API}&format=json&link={link}'
     else:
         url = f'https://{URL}/api'
-        params = {'api': API,
-                  'url': link,
-                  }
+        params = {'api': API, 'url': link}
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, params=params, raise_for_status=True, ssl=False) as response:
@@ -408,7 +392,11 @@ async def get_token(bot, userid, link, fileid):
     user = await bot.get_users(userid)
     if not await db.is_user_exist(user.id):
         await db.add_user(user.id, user.first_name)
-        await bot.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(user.id, user.mention))
+        # FIX: use named args to match LOG_TEXT_P template placeholders
+        await bot.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(
+            a=user.id, b=user.mention, c=getattr(user, 'username', 'N/A'),
+            d='N/A', e='N/A', f='N/A', g='N/A', h=temp.U_NAME
+        ))
     token = ''.join(random.choices(string.ascii_letters + string.digits, k=7))
     TOKENS[user.id] = {token: False}
     url = f"{link}verify-{user.id}-{token}-{fileid}"
@@ -417,7 +405,7 @@ async def get_token(bot, userid, link, fileid):
     time_var = status["time"]
     hour, minute, second = time_var.split(":")
     year, month, day = date_var.split("-")
-    last_date, last_time = str((datetime(year=int(year), month=int(month), day=int(day), hour=int(hour), minute=int(minute), second=int(second)))-timedelta(hours=12)).split(" ")
+    last_date, last_time = str((datetime(year=int(year), month=int(month), day=int(day), hour=int(hour), minute=int(minute), second=int(second))) - timedelta(hours=12)).split(" ")
     tz = pytz.timezone('Asia/Kolkata')
     curr_date, curr_time = str(datetime.now(tz)).split(" ")
     if last_date == curr_date:
@@ -440,12 +428,15 @@ async def check_verification(bot, userid):
     user = await bot.get_users(int(userid))
     if not await db.is_user_exist(user.id):
         await db.add_user(user.id, user.first_name)
-        await bot.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(user.id, user.mention))
+        await bot.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(
+            a=user.id, b=user.mention, c=getattr(user, 'username', 'N/A'),
+            d='N/A', e='N/A', f='N/A', g='N/A', h=temp.U_NAME
+        ))
     tz = pytz.timezone('Asia/Kolkata')
     today = date.today()
     now = datetime.now(tz)
-    curr_time = now.strftime("%H:%M:%S")
-    hour1, minute1, second1 = curr_time.split(":")
+    curr_time_str = now.strftime("%H:%M:%S")
+    hour1, minute1, second1 = curr_time_str.split(":")
     curr_time = time(int(hour1), int(minute1), int(second1))
     status = await get_verify_status(user.id)
     date_var = status["date"]
@@ -454,11 +445,11 @@ async def check_verification(bot, userid):
     comp_date = date(int(years), int(month), int(day))
     hour, minute, second = time_var.split(":")
     comp_time = time(int(hour), int(minute), int(second))
-    if comp_date<today:
+    if comp_date < today:
         return False
     else:
         if comp_date == today:
-            if comp_time<curr_time:
+            if comp_time < curr_time:
                 return False
             else:
                 return True

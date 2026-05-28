@@ -1,3 +1,7 @@
+"""
+Feature 1 — Redis-backed temp state
+Feature 3 — Rate limiting integration
+"""
 import logging
 from pyrogram.errors import InputUserDeactivated, UserNotParticipant, FloodWait, UserIsBlocked, PeerIdInvalid
 from info import AUTH_CHANNEL, LONG_IMDB_DESCRIPTION, MAX_LIST_ELM, LOG_CHANNEL
@@ -8,28 +12,23 @@ import aiohttp
 from pyrogram.types import Message, InlineKeyboardButton
 from pyrogram import enums
 from typing import Union
-import random 
+import random
 import re
 import pytz
-from Script import script 
+from Script import script
 from datetime import datetime, timedelta, date, time
-from typing import List
 from database.users_chats_db import db
 from bs4 import BeautifulSoup
-
+from cache.redis_manager import RedisManager, RateLimiter
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
-
-imdb = IMDb() 
+imdb = IMDb()
 
 TOKENS = {}
 VERIFIED = {}
 URLINK = {}
-BANNED = {}
-SMART_OPEN = '\u201c'
-SMART_CLOSE = '\u201d'
-START_CHAR = ('\'', '"', SMART_OPEN)
+
 
 class temp(object):
     BANNED_USERS = []
@@ -41,7 +40,7 @@ class temp(object):
     U_NAME = None
     B_NAME = None
     USERS_CANCEL = False
-    GROUPS_CANCEL = False 
+    GROUPS_CANCEL = False
     SETTINGS = {}
     VERIFY = {}
     VERIFY_PERIOD = {}
@@ -49,201 +48,64 @@ class temp(object):
     TOKEN_ACCEPTED = {}
     STORE_ID = {}
     MAINTENANCE_MODE = False
-    
+    WORKER_BOTS = []   # Feature 20 — populated by bot.py
+
+
 async def add_new_user(client, user):
-    tz = pytz.timezone('Asia/Kolkata')
+    tz = pytz.timezone("Asia/Kolkata")
     now = datetime.now(tz)
     today = now.date()
-    time_str = now.strftime('%I:%M:%S %p')
+    time_str = now.strftime("%I:%M:%S %p")
     total_users = await db.total_users_count()
-    # FIX: removed incorrect +1; DB count is accurate as-is
     daily_users = await db.daily_users_count(today)
     await db.add_user(user.id, user.first_name)
     await client.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(
-        a=user.id, b=user.mention, c=user.username,
-        d=total_users, e=daily_users, f=str(today), g=time_str, h=temp.U_NAME
-    ))
+        a=user.id, b=user.mention, c=getattr(user, "username", "N/A"),
+        d=total_users, e=daily_users, f=str(today), g=time_str, h=temp.U_NAME))
 
-def extract_commands(file_path):
-    commands = []
-    with open(file_path, 'r', encoding='utf-8') as file:
-        for line in file:
-            match = re.search(r'filters\.command\(["\'](\w+)["\']', line)
-            if match:
-                commands.append(match.group(1))
-    return commands
-    
-async def is_subscribed(bot, query):
-    try:
-        user = await bot.get_chat_member(AUTH_CHANNEL, query.from_user.id)
-    except UserNotParticipant:
-        pass
-    except Exception as e:
-        print(e)
-    else:
-        if user.status != enums.ChatMemberStatus.BANNED:
-            return True
-    return False
-
-async def get_poster(query, bulk=False, id=False, file=None):
-    if not id:
-        query = (query.strip()).lower()
-        title = query
-        year = re.findall(r'[1-2]\d{3}$', query, re.IGNORECASE)
-        if year:
-            year = list_to_str(year[:1])
-            title = (query.replace(year, "")).strip()
-        elif file is not None:
-            year = re.findall(r'[1-2]\d{3}', file, re.IGNORECASE)
-            if year:
-                year = list_to_str(year[:1]) 
-        else:
-            year = None
-        movieid = imdb.search_movie(title.lower(), results=10)
-        if not movieid:
-            return None
-        if year:
-            filtered = list(filter(lambda k: str(k.get('year')) == str(year), movieid))
-            if not filtered:
-                filtered = movieid
-        else:
-            filtered = movieid
-        movieid = list(filter(lambda k: k.get('kind') in ['movie', 'tv series'], filtered))
-        if not movieid:
-            movieid = filtered
-        if bulk:
-            return movieid
-        movieid = movieid[0].movieID
-    else:
-        movieid = query
-    movie = imdb.get_movie(movieid)
-    if movie.get("original air date"):
-        date_val = movie["original air date"]
-    elif movie.get("year"):
-        date_val = movie.get("year")
-    else:
-        date_val = "N/A"
-    plot = ""
-    if not LONG_IMDB_DESCRIPTION:
-        plot = movie.get('plot')
-        if plot and len(plot) > 0:
-            plot = plot[0]
-    else:
-        plot = movie.get('plot outline')
-    if plot and len(plot) > 800:
-        plot = plot[0:800] + "..."
-
-    return {
-        'title': movie.get('title'),
-        'votes': movie.get('votes'),
-        "aka": list_to_str(movie.get("akas")),
-        "seasons": movie.get("number of seasons"),
-        "box_office": movie.get('box office'),
-        'localized_title': movie.get('localized title'),
-        'kind': movie.get("kind"),
-        "imdb_id": f"tt{movie.get('imdbID')}",
-        "cast": list_to_str(movie.get("cast")),
-        "runtime": list_to_str(movie.get("runtimes")),
-        "countries": list_to_str(movie.get("countries")),
-        "certificates": list_to_str(movie.get("certificates")),
-        "languages": list_to_str(movie.get("languages")),
-        "director": list_to_str(movie.get("director")),
-        "writer": list_to_str(movie.get("writer")),
-        "producer": list_to_str(movie.get("producer")),
-        "composer": list_to_str(movie.get("composer")),
-        "cinematographer": list_to_str(movie.get("cinematographer")),
-        "music_team": list_to_str(movie.get("music department")),
-        "distributors": list_to_str(movie.get("distributors")),
-        'release_date': date_val,
-        'year': movie.get('year'),
-        'genres': list_to_str(movie.get("genres")),
-        'poster': movie.get('full-size cover url'),
-        'plot': plot,
-        'rating': str(movie.get("rating")),
-        'url': f'https://www.imdb.com/title/tt{movieid}'
-    }
-
-
-async def search_gagala(text):
-    usr_agent = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) '
-        'Chrome/61.0.3163.100 Safari/537.36'
-    }
-    text = text.replace(" ", '+')
-    url = f'https://www.google.com/search?q={text}'
-    try:
-        async with aiohttp.ClientSession(headers=usr_agent) as session:
-            async with session.get(url, raise_for_status=True) as response:
-                html = await response.text()
-                soup = BeautifulSoup(html, 'html.parser')
-                titles = soup.find_all('h3')
-                return [title.getText() for title in titles]
-    except Exception as e:
-        logger.error(f"Error in search_gagala: {e}")
-        return []
 
 async def get_settings(group_id):
-    settings = temp.SETTINGS.get(group_id)
+    # Feature 1 — try Redis first
+    settings = await RedisManager.get_settings(group_id)
     if not settings:
         settings = await db.get_settings(group_id)
-        temp.SETTINGS[group_id] = settings
+        await RedisManager.set_settings(group_id, settings)
     return settings
-    
+
+
 async def save_group_settings(group_id, key, value):
     current = await get_settings(group_id)
     current[key] = value
-    temp.SETTINGS[group_id] = current
+    await RedisManager.set_settings(group_id, current)
     await db.update_settings(group_id, current)
-    
+
+
+async def check_rate_limit(user_id: int, action: str = "search") -> bool:
+    """Feature 3 — Returns True if request is allowed."""
+    return await RateLimiter.check(user_id, action, limit=5, window=10)
+
+
 def get_size(size):
-    """Get size in readable format"""
     units = ["Bytes", "KB", "MB", "GB", "TB", "PB", "EB"]
     size = float(size)
     i = 0
-    # FIX: use len(units) - 1 to prevent IndexError on very large sizes
     while size >= 1024.0 and i < len(units) - 1:
         i += 1
         size /= 1024.0
     return "%.2f %s" % (size, units[i])
 
 
-def get_file_id(msg: Message):
-    if msg.media:
-        for message_type in (
-            "photo", "animation", "audio", "document",
-            "video", "video_note", "voice", "sticker"
-        ):
-            obj = getattr(msg, message_type)
-            if obj:
-                setattr(obj, "message_type", message_type)
-                return obj
-                
-def extract_user(message: Message) -> Union[int, str]:
-    """extracts the user from a message"""
-    user_id = None
-    user_first_name = None
-    if message.reply_to_message:
-        user_id = message.reply_to_message.from_user.id
-        user_first_name = message.reply_to_message.from_user.first_name
-    elif len(message.command) > 1:
-        if (
-            len(message.entities) > 1 and
-            message.entities[1].type == enums.MessageEntityType.TEXT_MENTION
-        ):
-            required_entity = message.entities[1]
-            user_id = required_entity.user.id
-            user_first_name = required_entity.user.first_name
-        else:
-            user_id = message.command[1]
-            user_first_name = user_id
-        try:
-            user_id = int(user_id)
-        except ValueError:
-            pass
-    else:
-        user_id = message.from_user.id
-        user_first_name = message.from_user.first_name
-    return (user_id, user_first_name)
+def humanbytes(size):
+    if not size:
+        return ""
+    power = 2 ** 10
+    n = 0
+    Dic_powerN = {0: " ", 1: "Ki", 2: "Mi", 3: "Gi", 4: "Ti"}
+    while size > power and n < 4:
+        size /= power
+        n += 1
+    return str(round(size, 2)) + " " + Dic_powerN[n] + "B"
+
 
 def list_to_str(k):
     if not k:
@@ -252,206 +114,192 @@ def list_to_str(k):
         return str(k[0])
     elif MAX_LIST_ELM:
         k = k[:int(MAX_LIST_ELM)]
-    # FIX: proper comma-separated join without trailing comma
-    return ', '.join(str(elem) for elem in k)
-
-def last_online(from_user):
-    time_str = ""
-    if from_user.is_bot:
-        time_str += "🤖 Bot :("
-    elif from_user.status == enums.UserStatus.RECENTLY:
-        time_str += "Recently"
-    elif from_user.status == enums.UserStatus.LAST_WEEK:
-        time_str += "Within the last week"
-    elif from_user.status == enums.UserStatus.LAST_MONTH:
-        time_str += "Within the last month"
-    elif from_user.status == enums.UserStatus.LONG_AGO:
-        time_str += "A long time ago :("
-    elif from_user.status == enums.UserStatus.ONLINE:
-        time_str += "Currently Online"
-    elif from_user.status == enums.UserStatus.OFFLINE:
-        time_str += from_user.last_online_date.strftime("%a, %d %b %Y, %H:%M:%S")
-    return time_str
+    return ", ".join(str(e) for e in k)
 
 
-def humanbytes(size):
-    if not size:
-        return ""
-    power = 2**10
-    n = 0
-    # FIX: cap at 4 (Ti) to prevent KeyError beyond dict range
-    Dic_powerN = {0: ' ', 1: 'Ki', 2: 'Mi', 3: 'Gi', 4: 'Ti'}
-    while size > power and n < 4:
-        size /= power
-        n += 1
-    return str(round(size, 2)) + " " + Dic_powerN[n] + 'B'
+def get_file_id(msg: Message):
+    if msg.media:
+        for message_type in ("photo", "animation", "audio", "document",
+                             "video", "video_note", "voice", "sticker"):
+            obj = getattr(msg, message_type)
+            if obj:
+                setattr(obj, "message_type", message_type)
+                return obj
 
 
-async def send_verification_log(bot, userid, date_temp, time_temp):
-    user = await bot.get_users(int(userid))
-    log_message = f"#VerificationLog:\nUser ID: {user.id}\nUser Name: {user.mention}\nDate: {date_temp}\nTime: {time_temp}"
-    await bot.send_message(LOG_CHANNEL, log_message)
+def get_readable_time(seconds):
+    periods = [("d", 86400), ("h", 3600), ("m", 60), ("s", 1)]
+    result = ""
+    for name, secs in periods:
+        if seconds >= secs:
+            val, seconds = divmod(seconds, secs)
+            result += f"{int(val)}{name}"
+    return result or "0s"
 
 
-async def update_verify_status(bot, userid, date_temp, time_temp):
-    status = await get_verify_status(userid)
-    status["date"] = date_temp
-    status["time"] = time_temp
-    temp.VERIFY[userid] = status
-    await db.update_verification(userid, date_temp, time_temp)
-    await send_verification_log(bot, userid, date_temp, time_temp)
+# ── verify helpers ────────────────────────────────────────────────────────────
+async def get_verify_status(userid):
+    # Feature 1 — Redis-backed verify cache
+    status = await RedisManager.get_verify_status(userid)
+    if not status:
+        status = await db.get_verified(userid)
+        await RedisManager.set_verify_status(userid, status)
+    return status
+
 
 async def verify_user(bot, userid, token):
     user = await bot.get_users(int(userid))
     if not await db.is_user_exist(user.id):
         await db.add_user(user.id, user.first_name)
-        # FIX: use named args to match LOG_TEXT_P template placeholders
         await bot.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(
-            a=user.id, b=user.mention, c=getattr(user, 'username', 'N/A'),
-            d='N/A', e='N/A', f='N/A', g='N/A', h=temp.U_NAME
-        ))
+            a=user.id, b=user.mention, c=getattr(user, "username", "N/A"),
+            d="N/A", e="N/A", f="N/A", g="N/A", h=temp.U_NAME))
+    # Feature 17 — mark token as used in Redis
+    await RedisManager.mark_token_used(user.id, token)
     TOKENS[user.id] = {token: True}
-    tz = pytz.timezone('Asia/Kolkata')
+    tz = pytz.timezone("Asia/Kolkata")
     date_var = datetime.now(tz) + timedelta(hours=12)
     temp_time = date_var.strftime("%H:%M:%S")
-    date_var, time_var = str(date_var).split(" ")
-    await update_verify_status(bot, user.id, date_var, temp_time)
+    date_str, _ = str(date_var).split(" ")
+    await db.update_verification(user.id, date_str, temp_time)
+    await RedisManager.set_verify_status(user.id, {"date": date_str, "time": temp_time})
 
 
 async def check_token(bot, userid, token):
+    # Feature 17 — check Redis first for used tokens
+    if await RedisManager.is_token_used(userid, token):
+        return False
     user = await bot.get_users(userid)
-    if not await db.is_user_exist(user.id):
-        await db.add_user(user.id, user.first_name)
-        # FIX: use named args to match LOG_TEXT_P template placeholders
-        await bot.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(
-            a=user.id, b=user.mention, c=getattr(user, 'username', 'N/A'),
-            d='N/A', e='N/A', f='N/A', g='N/A', h=temp.U_NAME
-        ))
-    if user.id in TOKENS.keys():
-        TKN = TOKENS[user.id]
-        if token in TKN.keys():
-            is_used = TKN[token]
-            if is_used == True:
-                return False
-            else:
-                return True
+    if user.id in TOKENS:
+        tkn = TOKENS[user.id]
+        if token in tkn:
+            return not tkn[token]
     return False
-
-async def get_verify_shorted_link(num, link):
-    from info import SHORTLINK_API, SHORTLINK_URL, VERIFY2_API, VERIFY2_URL
-    if int(num) == 1:
-        API = SHORTLINK_API
-        URL = SHORTLINK_URL
-    else:
-        API = VERIFY2_API
-        URL = VERIFY2_URL
-    https = link.split(":")[0]
-    if "http" == https:
-        https = "https"
-        link = link.replace("http", https)
-
-    if URL == "api.shareus.in":
-        url = f"https://{URL}/shortLink"
-        params = {"token": API, "format": "json", "link": link}
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params, raise_for_status=True, ssl=False) as response:
-                    data = await response.json(content_type="text/html")
-                    if data["status"] == "success":
-                        return data["shortlink"]
-                    else:
-                        logger.error(f"Error: {data['message']}")
-                        return f'https://{URL}/shortLink?token={API}&format=json&link={link}'
-        except Exception as e:
-            logger.error(e)
-            return f'https://{URL}/shortLink?token={API}&format=json&link={link}'
-    else:
-        url = f'https://{URL}/api'
-        params = {'api': API, 'url': link}
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params, raise_for_status=True, ssl=False) as response:
-                    data = await response.json()
-                    if data["status"] == "success":
-                        return data["shortenedUrl"]
-                    else:
-                        logger.error(f"Error: {data['message']}")
-                        if URL == 'clicksfly.com':
-                            return f'https://{URL}/api?api={API}&url={link}'
-                        else:
-                            return f'https://{URL}/api?api={API}&link={link}'
-        except Exception as e:
-            logger.error(e)
-            if URL == 'clicksfly.com':
-                return f'https://{URL}/api?api={API}&url={link}'
-            else:
-                return f'https://{URL}/api?api={API}&link={link}'
 
 
 async def get_token(bot, userid, link, fileid):
     user = await bot.get_users(userid)
     if not await db.is_user_exist(user.id):
         await db.add_user(user.id, user.first_name)
-        # FIX: use named args to match LOG_TEXT_P template placeholders
         await bot.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(
-            a=user.id, b=user.mention, c=getattr(user, 'username', 'N/A'),
-            d='N/A', e='N/A', f='N/A', g='N/A', h=temp.U_NAME
-        ))
-    token = ''.join(random.choices(string.ascii_letters + string.digits, k=7))
+            a=user.id, b=user.mention, c=getattr(user, "username", "N/A"),
+            d="N/A", e="N/A", f="N/A", g="N/A", h=temp.U_NAME))
+    token = "".join(random.choices(string.ascii_letters + string.digits, k=7))
     TOKENS[user.id] = {token: False}
+    await RedisManager.set_verify_token(user.id, token)
     url = f"{link}verify-{user.id}-{token}-{fileid}"
     status = await get_verify_status(user.id)
     date_var = status["date"]
     time_var = status["time"]
     hour, minute, second = time_var.split(":")
     year, month, day = date_var.split("-")
-    last_date, last_time = str((datetime(year=int(year), month=int(month), day=int(day), hour=int(hour), minute=int(minute), second=int(second))) - timedelta(hours=12)).split(" ")
-    tz = pytz.timezone('Asia/Kolkata')
-    curr_date, curr_time = str(datetime.now(tz)).split(" ")
-    if last_date == curr_date:
-        vr_num = 2
-    else:
-        vr_num = 1
-    shortened_verify_url = await get_verify_shorted_link(vr_num, url)
-    return str(shortened_verify_url)
-
-
-async def get_verify_status(userid):
-    status = temp.VERIFY.get(userid)
-    if not status:
-        status = await db.get_verified(userid)
-        temp.VERIFY[userid] = status
-    return status
+    tz = pytz.timezone("Asia/Kolkata")
+    last_dt = datetime(int(year), int(month), int(day),
+                       int(hour), int(minute), int(second)) - timedelta(hours=12)
+    curr_date = datetime.now(tz).date()
+    vr_num = 2 if str(last_dt.date()) == str(curr_date) else 1
+    return await get_verify_shorted_link(vr_num, url)
 
 
 async def check_verification(bot, userid):
     user = await bot.get_users(int(userid))
     if not await db.is_user_exist(user.id):
         await db.add_user(user.id, user.first_name)
-        await bot.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(
-            a=user.id, b=user.mention, c=getattr(user, 'username', 'N/A'),
-            d='N/A', e='N/A', f='N/A', g='N/A', h=temp.U_NAME
-        ))
-    tz = pytz.timezone('Asia/Kolkata')
+    tz = pytz.timezone("Asia/Kolkata")
     today = date.today()
     now = datetime.now(tz)
     curr_time_str = now.strftime("%H:%M:%S")
-    hour1, minute1, second1 = curr_time_str.split(":")
-    curr_time = time(int(hour1), int(minute1), int(second1))
+    h, m, s = curr_time_str.split(":")
+    curr_time = time(int(h), int(m), int(s))
     status = await get_verify_status(user.id)
-    date_var = status["date"]
-    time_var = status["time"]
-    years, month, day = date_var.split('-')
-    comp_date = date(int(years), int(month), int(day))
-    hour, minute, second = time_var.split(":")
-    comp_time = time(int(hour), int(minute), int(second))
+    date_var, time_var = status["date"], status["time"]
+    yr, mo, dy = date_var.split("-")
+    comp_date = date(int(yr), int(mo), int(dy))
+    hh, mm, ss = time_var.split(":")
+    comp_time = time(int(hh), int(mm), int(ss))
     if comp_date < today:
         return False
+    if comp_date == today:
+        return comp_time >= curr_time
+    return True
+
+
+async def get_verify_shorted_link(num, link):
+    from info import SHORTLINK_API, SHORTLINK_URL, VERIFY2_API, VERIFY2_URL
+    from database.users_chats_db import db as _db
+    # Feature 19 — prefer DB-stored keys over env vars
+    if int(num) == 1:
+        API = await _db.get_api_key("shortlink") or SHORTLINK_API
+        URL = await _db.get_api_key("shortlink_url") or SHORTLINK_URL
     else:
-        if comp_date == today:
-            if comp_time < curr_time:
-                return False
-            else:
-                return True
+        API = await _db.get_api_key("verify2") or VERIFY2_API
+        URL = await _db.get_api_key("verify2_url") or VERIFY2_URL
+
+    if link.startswith("http:"):
+        link = "https:" + link[5:]
+
+    url = f"https://{URL}/api"
+    params = {"api": API, "url": link}
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, params=params, ssl=False) as resp:
+                data = await resp.json()
+                if data.get("status") == "success":
+                    return data["shortenedUrl"]
+    except Exception as e:
+        logger.error(f"Shortlink error: {e}")
+    return link
+
+
+async def get_poster(query, bulk=False, id=False, file=None):
+    if not id:
+        query = query.strip().lower()
+        title = query
+        year = re.findall(r"[1-2]\d{3}$", query, re.IGNORECASE)
+        if year:
+            year = list_to_str(year[:1])
+            title = query.replace(year, "").strip()
+        elif file:
+            year = re.findall(r"[1-2]\d{3}", file, re.IGNORECASE)
+            year = list_to_str(year[:1]) if year else None
         else:
-            return True
+            year = None
+        movieid = imdb.search_movie(title, results=10)
+        if not movieid:
+            return None
+        if year:
+            filtered = [k for k in movieid if str(k.get("year")) == str(year)]
+            if not filtered:
+                filtered = movieid
+        else:
+            filtered = movieid
+        movieid = [k for k in filtered if k.get("kind") in ["movie", "tv series"]] or filtered
+        if bulk:
+            return movieid
+        movieid = movieid[0].movieID
+    else:
+        movieid = query
+    movie = imdb.get_movie(movieid)
+    plot = movie.get("plot outline" if LONG_IMDB_DESCRIPTION else "plot")
+    if isinstance(plot, list) and plot:
+        plot = plot[0]
+    if plot and len(plot) > 800:
+        plot = plot[:800] + "..."
+    return {
+        "title": movie.get("title"),
+        "votes": movie.get("votes"),
+        "aka": list_to_str(movie.get("akas")),
+        "seasons": movie.get("number of seasons"),
+        "imdb_id": f"tt{movie.get('imdbID')}",
+        "cast": list_to_str(movie.get("cast")),
+        "runtime": list_to_str(movie.get("runtimes")),
+        "countries": list_to_str(movie.get("countries")),
+        "languages": list_to_str(movie.get("languages")),
+        "director": list_to_str(movie.get("director")),
+        "genres": list_to_str(movie.get("genres")),
+        "poster": movie.get("full-size cover url"),
+        "plot": plot,
+        "rating": str(movie.get("rating")),
+        "year": movie.get("year"),
+        "url": f"https://www.imdb.com/title/tt{movieid}",
+    }

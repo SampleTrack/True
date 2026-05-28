@@ -8,12 +8,22 @@ marshmallow==3.20.1
 umongo==3.1.0
 motor==3.7.0
 
+#---web / async---#
 requests
+aiohttp
+gunicorn
+
+#---utils---#
 bs4
 imdbpy
 datetime
-aiohttp
-# FIX: added missing pytz dependency
 pytz
-gunicorn
-# FIX: removed 'pip' — not a valid package dependency
+
+#---feature: redis caching & rate limiting---#
+redis[hiredis]>=5.0.0
+
+#---feature: scheduler (auto-index, backup, watch notifications)---#
+apscheduler>=3.10.0
+
+#---feature: sentry error tracking---#
+sentry-sdk>=2.0.0

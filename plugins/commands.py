@@ -102,7 +102,6 @@ async def start(client, message):
                 parse_mode=enums.ParseMode.MARKDOWN
             )
             return
-            return
         except Exception as e:
             logger.error(f"Force Sub Display Error: {e}")
             # Secondary fallback to hardcoded script text
@@ -169,8 +168,8 @@ async def start(client, message):
                     protect_content=msg.get('protect', False),
                 )
             except FloodWait as e:
-                await asyncio.sleep(e.x)
-                logger.warning(f"Floodwait of {e.x} sec.")
+                await asyncio.sleep(e.value)
+                logger.warning(f"Floodwait of {e.value} sec.")
                 await client.send_cached_media(
                     chat_id=message.from_user.id,
                     file_id=msg.get("file_id"),
@@ -209,7 +208,7 @@ async def start(client, message):
                 try:
                     await msg.copy(message.chat.id, caption=f_caption, protect_content=True if protect == "/pbatch" else False)
                 except FloodWait as e:
-                    await asyncio.sleep(e.x)
+                    await asyncio.sleep(e.value)
                     await msg.copy(message.chat.id, caption=f_caption, protect_content=True if protect == "/pbatch" else False)
                 except Exception as e:
                     logger.exception(e)
@@ -220,7 +219,7 @@ async def start(client, message):
                 try:
                     await msg.copy(message.chat.id, protect_content=True if protect == "/pbatch" else False)
                 except FloodWait as e:
-                    await asyncio.sleep(e.x)
+                    await asyncio.sleep(e.value)
                     await msg.copy(message.chat.id, protect_content=True if protect == "/pbatch" else False)
                 except Exception as e:
                     logger.exception(e)

@@ -37,6 +37,7 @@ async def favourites_cmd(bot, message):
 
 @Client.on_callback_query(filters.regex(r"^rmfav#"))
 async def remove_fav_cb(bot, query):
+    await query.answer()
     file_id = query.data.split("#", 1)[1]
     await db.remove_favourite(query.from_user.id, file_id)
     await query.answer("Removed from favourites ✅", show_alert=True)
@@ -100,6 +101,7 @@ async def referral_cmd(bot, message):
 
 @Client.on_callback_query(filters.regex(r"^top_referrers$"))
 async def top_referrers_cb(bot, query):
+    await query.answer()
     top = await db.get_top_referrers(10)
     if not top:
         return await query.answer("No referrals yet!", show_alert=True)

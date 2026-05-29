@@ -27,6 +27,8 @@ def start_scheduler(bot):
                       id="watch_notify", args=[bot], replace_existing=True)
     scheduler.add_job(analytics_cleanup_task, CronTrigger(hour=3, minute=0),
                       id="analytics_cleanup", replace_existing=True)
+    scheduler.add_job(notify_flush_task, IntervalTrigger(minutes=30),
+                      id="notify_flush", args=[bot], replace_existing=True)
     scheduler.start()
     logger.info("Scheduler started with 4 tasks")
 
@@ -140,3 +142,13 @@ async def analytics_cleanup_task():
     from database.users_chats_db import db
     deleted = await db.cleanup_old_analytics(days=90)
     logger.info(f"Analytics cleanup: removed {deleted} old records")
+
+
+# ── File Notify Flush Task ───────────────────────────────────────────────────
+async def notify_flush_task(bot):
+    """Feature: flush queued new file notifications every 30 min."""
+    try:
+        from plugins.file_notify import flush_new_file_notifications
+        await flush_new_file_notifications(bot)
+    except Exception as e:
+        logger.error(f"Notify flush task error: {e}")

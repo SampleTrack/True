@@ -355,4 +355,35 @@ class Database:
         return (doc or {}).get("channels", {}).get(str(channel_id), 0)
 
 
+    # ── File Notification Subscription ────────────────────────────────────────
+    async def set_notify_status(self, user_id: int, status: bool):
+        await self.col.update_one(
+            {"id": int(user_id)},
+            {"$set": {"new_file_notify": status}},
+            upsert=True
+        )
+
+    async def get_notify_status(self, user_id: int) -> bool:
+        doc = await self.col.find_one({"id": int(user_id)})
+        return (doc or {}).get("new_file_notify", False)
+
+    async def get_notify_subscribers(self) -> list:
+        """Return list of user IDs who have new_file_notify = True."""
+        cursor = self.col.find({"new_file_notify": True}, {"id": 1})
+        return [doc["id"] async for doc in cursor]
+
+    # ── Admin Settings Panel ───────────────────────────────────────────────────
+    async def get_bot_admin_settings(self) -> dict:
+        doc = await self.config.find_one({"id": "admin_settings"})
+        return dict(doc) if doc else {}
+
+    async def save_bot_admin_settings(self, settings: dict):
+        settings.pop("_id", None)
+        await self.config.update_one(
+            {"id": "admin_settings"},
+            {"$set": settings},
+            upsert=True
+        )
+
+
 db = Database(DATABASE_URI, DATABASE_NAME)

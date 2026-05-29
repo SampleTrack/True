@@ -90,6 +90,12 @@ async def save_file(media):
         logger.warning(f"Duplicate file_id skipped: {file_name}")
         return False, 0
     logger.info(f"Saved: {file_name}")
+    # Queue notification for subscribed users
+    try:
+        from plugins.file_notify import queue_new_file
+        queue_new_file(file_name, file_id)
+    except Exception:
+        pass
     return True, 1
 
 

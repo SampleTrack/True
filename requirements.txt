@@ -8,7 +8,7 @@ marshmallow==3.20.1
 umongo==3.1.0
 motor==3.7.0
 
-#---web / async---#
+#---web/async---#
 requests
 aiohttp
 gunicorn
@@ -19,11 +19,19 @@ imdbpy
 datetime
 pytz
 
-#---feature: redis caching & rate limiting---#
+#---caching/rate limiting---#
 redis[hiredis]>=5.0.0
 
-#---feature: scheduler (auto-index, backup, watch notifications)---#
+#---scheduler---#
 apscheduler>=3.10.0
 
-#---feature: sentry error tracking---#
+#---error tracking---#
 sentry-sdk>=2.0.0
+
+#---metadata extraction (Layer 1 - pure python)---#
+mutagen
+
+#---metadata extraction (Layer 2 - video/audio tracks)---#
+# ffprobe is used via subprocess — install ffmpeg on your server:
+# Render: add build command: apt-get install -y ffmpeg
+# or set ENABLE_METADATA_DOWNLOAD=False to skip Layer 2

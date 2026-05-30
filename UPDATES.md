@@ -279,3 +279,80 @@ Use with Render health checks or UptimeRobot.
 | `/setapikey <service> <key>` | Admins | 19 |
 | `/getapikey <service>` | Admins | 19 |
 | `/checkuser <id>` | Admins | 18 |
+
+---
+
+## Feature 23 — Smart Metadata Extraction (Layer 1)
+**File:** `utils/metadata.py`
+
+Every file is now parsed through a 3-step pipeline before saving:
+
+1. **Regex parser** extracts from filename + caption:
+   - Year: `2022`, `(2022)`, `[2022]`
+   - Languages: Hindi, Tamil, Telugu, Malayalam, English, Korean, etc.
+   - Quality: 1080p, 720p, 4K, HDR, BluRay, WEB-DL, etc.
+   - Codec: HEVC, x264, x265, AVC, etc.
+   - Audio: AAC, DTS, Dolby, AC3, etc.
+   - Season/Episode: S01E01, Season 1, etc.
+   - Detects dubbed, dual-audio, multi-audio
+
+2. **Caption cleaner** strips emojis, @mentions, channel links, junk symbols
+
+3. **IMDb verification** — title verified against IMDb, gets official name, rating, genres
+
+**Result:** `file_name` saved as structured `"RRR 2022 Hindi Tamil 1080p"` regardless of original filename mess.
+
+---
+
+## Feature 24 — ffprobe Partial Download (Layer 2)
+**File:** `utils/metadata.py` → `extract_ffprobe_metadata()`
+
+Downloads only the **first 5 MB** of each video/document file and runs `ffprobe` to extract:
+- Actual audio track languages (from stream metadata, not just filename)
+- Subtitle track languages embedded in the container
+- Video codec (HEVC, AVC, etc.)
+- HDR detection (bt2020 color space)
+- Embedded title tag (if encoder set it correctly)
+
+**Enable:** Set `ENABLE_METADATA_DOWNLOAD=True` in env vars  
+**Requires:** `ffmpeg` installed on server (`apt-get install -y ffmpeg` on Render)  
+**Default:** `False` — safe for free-tier servers
+
+---
+
+## Feature 25 — Rich Channel Auto-Index
+**File:** `plugins/channel.py`
+
+When admin posts a file in the indexed channel:
+- Runs full metadata pipeline automatically
+- Logs to `LOG_CHANNEL` with: title, year, languages, quality, codec, subtitles, IMDb rating, size
+- Warns admin in LOG_CHANNEL if file saved with a generic/suspicious name
+- Updates `last_indexed_msg_id` for scheduler compatibility
+- Handles all media types: document, video, audio, animation, voice
+
+---
+
+## Feature 26 — Admin File Management Commands
+**File:** `plugins/file_management.py`
+
+| Command | Usage |
+|---------|-------|
+| `/rename` | Reply to file message + `/rename New Name` — fixes wrong name in DB |
+| `/fileinfo <name>` | Shows full stored metadata: languages, subtitles, codec, IMDb, size |
+| `/delfile <name>` | Shows matching files with inline delete buttons |
+| `/searchadv` | Advanced search with filters: `lang:Hindi year:2022 quality:1080p` |
+
+---
+
+## New Environment Variable
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ENABLE_METADATA_DOWNLOAD` | `False` | Enable ffprobe partial download (Layer 2). Requires ffmpeg installed. |
+
+## Render Setup for Layer 2
+
+Add this to your Render build command to install ffmpeg:
+```
+pip install -r requirements.txt && apt-get install -y ffmpeg
+```

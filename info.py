@@ -26,6 +26,9 @@ REDIS_URL = environ.get('REDIS_URL', 'redis://localhost:6379')
 # ── Feature 21 — Sentry ──────────────────────────────────────────────────────
 SENTRY_DSN = environ.get('SENTRY_DSN', '')
 
+# ── Metadata extraction (Layer 2)
+ENABLE_METADATA_DOWNLOAD = is_enabled(environ.get('ENABLE_METADATA_DOWNLOAD', 'False'), False)
+
 # ── Feature 20 — Multi-bot token pool ────────────────────────────────────────
 # Space-separated extra bot tokens; primary is BOT_TOKEN above
 EXTRA_BOT_TOKENS = environ.get('EXTRA_BOT_TOKENS', '').split()

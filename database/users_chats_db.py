@@ -1,7 +1,7 @@
 import pytz
 from datetime import date, datetime, timedelta
 import motor.motor_asyncio
-from info import DATABASE_NAME, DATABASE_URI, AUTO_DELETE, IMDB, IMDB_TEMPLATE, MELCOW_NEW_USERS, P_TTI_SHOW_OFF, SINGLE_BUTTON, SPELL_CHECK_REPLY, PROTECT_CONTENT
+from info import DATABASE_NAME, DATABASE_URI, AUTO_DELETE, MELCOW_NEW_USERS, P_TTI_SHOW_OFF, SINGLE_BUTTON, SPELL_CHECK_REPLY, PROTECT_CONTENT
 
 class Database:
     
@@ -134,7 +134,6 @@ class Database:
         b_users = [user['id'] async for user in users]
         return b_users, b_chats
     
-    # FIX: added username parameter to match call in p_ttishow.py
     async def add_chat(self, chat, title, username=None):
         chat_doc = self.new_group(chat, title)
         if username:
@@ -161,10 +160,8 @@ class Database:
             'button': SINGLE_BUTTON,
             'botpm': P_TTI_SHOW_OFF,
             'file_secure': PROTECT_CONTENT,
-            'imdb': IMDB,
             'spell_check': SPELL_CHECK_REPLY,
             'welcome': MELCOW_NEW_USERS,
-            'template': IMDB_TEMPLATE,
             'auto_delete': AUTO_DELETE
         }
         chat = await self.grp.find_one({'id': int(id)})

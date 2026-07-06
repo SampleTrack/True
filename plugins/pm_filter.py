@@ -17,6 +17,7 @@ logger.setLevel(logging.ERROR)
 
 PM_BUTTONS = {}
 PM_SPELL_CHECK = {}
+DELETE_DELAY = 600  # Explicit global threshold: 10 minutes lifespan
 
 # --- UTILITY FUNCTIONS ---
 
@@ -39,7 +40,6 @@ def generate_pm_buttons(files, pre):
 
 @Client.on_message(filters.private & filters.text & filters.incoming)
 async def pm_filter_handler(client, message):
-    # 1. Global Toggle Check
     if not PM_FILTER_ON:
         return
 
@@ -47,17 +47,14 @@ async def pm_filter_handler(client, message):
     if not user_id:
         return
 
-    # 2. Strict Authorization Guard (Only Admins & Authorized Users)
     if user_id not in ADMINS and user_id not in AUTH_USERS:
         return
 
-    # Track activity for authorized users
     await db.track_user_activity(user_id, message.from_user.first_name or "User")
 
     text = message.text.strip()
     text_lower = text.lower()
 
-    # 3. Structural Validation & Ignored Text Filters
     if len(text) < 3 or text_lower.startswith(("/", "!", ".", ",")):
         return
 
@@ -69,14 +66,12 @@ async def pm_filter_handler(client, message):
     if any(x in text_lower for x in BAD_PATTERNS) or len(text) > 300:
         return
 
-    # Clean query text
     search = re.sub(r'[^a-zA-Z0-9 ]', '', text_lower)
     search = " ".join(search.split())
     if not search:
         return
 
-    # Automatically trigger auto-deletion for valid incoming user search messages
-    asyncio.create_task(safe_delete(message, 600))
+    asyncio.create_task(safe_delete(message, DELETE_DELAY))
     await execute_pm_filter(client, message, search)
 
 
@@ -87,15 +82,20 @@ async def execute_pm_filter(client, message, search, spoll_string=None):
 
     target_search = spoll_string if spoll_string else search
     
+    # FIX 1: Instant visual placeholder initialization to hold user retention
+    status_msg = await message.reply_text(
+        "<b>🔍 Searching database, please wait...</b>", 
+        parse_mode=enums.ParseMode.HTML
+    )
+    
     files, offset, total_results = await get_search_results(target_search, offset=0, filter=True)
     
     if not files:
-        # If no files match and it wasn't already a spellcheck selection, trigger spellcheck
+        asyncio.create_task(safe_delete(status_msg))
         if not spoll_string:
             return await pm_spell_check_handler(message)
         return
 
-    # Generate results interface using unique pm prefix
     btn = generate_pm_buttons(files, "pmfile")
 
     if offset != "":
@@ -110,10 +110,10 @@ async def execute_pm_filter(client, message, search, spoll_string=None):
         btn.append([InlineKeyboardButton(text="📃 Page 1 / 1", callback_data="pm_pages")])
 
     cap = f"<b>✨ PM Search Results for:</b> <code>{target_search}</code>"
-    bot_reply = await message.reply_text(cap, parse_mode=enums.ParseMode.HTML, reply_markup=InlineKeyboardMarkup(btn))
     
-    # Auto-delete the search results overview message after 10 minutes
-    asyncio.create_task(safe_delete(bot_reply, 600))
+    # Dynamically inject structural results layout over loading sequence placeholder
+    await status_msg.edit_text(cap, parse_mode=enums.ParseMode.HTML, reply_markup=InlineKeyboardMarkup(btn))
+    asyncio.create_task(safe_delete(status_msg, DELETE_DELAY))
 
 
 # --- CALLBACK QUERY HANDLERS ---
@@ -172,7 +172,6 @@ async def pm_file_delivery(client, query):
     title = file.file_name
     size = get_size(file.file_size)
     
-    # Verification System Integration
     if IS_VERIFY and not await check_verification(client, user_id):
         btn = [[
             InlineKeyboardButton("Verify", url=await get_token(client, user_id, f"https://telegram.me/{temp.U_NAME}?start=", file_id)),
@@ -184,8 +183,7 @@ async def pm_file_delivery(client, query):
             parse_mode=enums.ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup(btn)
         )
-        # Auto-delete the verification prompt after 10 minutes
-        asyncio.create_task(safe_delete(verify_msg, 600))
+        asyncio.create_task(safe_delete(verify_msg, DELETE_DELAY))
         return await query.answer("Verification required! Complete check inside PM.", show_alert=True)
 
     try:
@@ -199,7 +197,7 @@ async def pm_file_delivery(client, query):
             ])
         )
         
-        info_msg = await query.message.reply_text(
+        info_msg = await query.message.reply_to_message.reply_text(
             f"<b>✅ File Processed Successfully!</b>\n\n<b>Title:</b> {title}\n<b>Size:</b> {size}",
             parse_mode=enums.ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup([
@@ -209,12 +207,11 @@ async def pm_file_delivery(client, query):
         )
         await query.answer('File delivered successfully!')
         
-        # Auto-delete file references after 10 minutes to maintain copyright safety and cleanliness
-        asyncio.create_task(safe_delete(info_msg, 600))
-        asyncio.create_task(safe_delete(file_send, 600))
+        asyncio.create_task(safe_delete(info_msg, DELETE_DELAY))
+        asyncio.create_task(safe_delete(file_send, DELETE_DELAY))
         
-        # Clean up the original search list immediately once file delivery executes successfully
-        asyncio.create_task(safe_delete(query.message))
+        # FIX 2: Removed instant deletion tracking on query.message layout.
+        # This keeps the interface fluid for multiple files or multi-page browsing.
         
     except UserIsBlocked:
         await query.answer('Please unblock the bot to route media transfers.', show_alert=True)
@@ -239,15 +236,17 @@ async def pm_spellcheck_callback(bot, query):
         
     selected_movie = movies[int(movie_idx)]
     await query.answer('Searching records...')
-    await execute_pm_filter(bot, query.message, search=None, spoll_string=selected_movie)
+    
+    # Clear original suggestion message safely before filtering
     await safe_delete(query.message)
+    await execute_pm_filter(bot, query.message.reply_to_message, search=None, spoll_string=selected_movie)
 
 
 @Client.on_callback_query(filters.regex(r"^pm_"))
 async def pm_language_alerts(bot, query):
     alerts = {
         "pm_hin": "कॉपीराइट के कारण फ़ाइल 10 मिनट में डिलीट हो जाएगी, इसे Saved Messages में सुरक्षित करें!",
-        "pm_mar": "कॉपीराइट मुळे ही ... ... फाइल 10 मिनिटांत डिलिट केली जाईल, Saved Messages मध्ये पाठवून डाउनलोड करा.",
+        "pm_mar": "कॉपीराइट मुळे ही फाइल 10 मिनिटांत डिलिट केली जाईल, Saved Messages मध्ये पाठवून डाउनलोड करा.",
         "pm_tel": "కాపీరైట్ కారణంగా ఈ ఫైల్ 10 నిమిషాల్లో తొలగిపోతుంది, సేవ్డ్ సందేశాలలో పంపించండి!"
     }
     if query.data in alerts:
@@ -292,5 +291,4 @@ async def pm_spell_check_handler(msg):
     reply_msg = await msg.reply("I couldn't locate exact file matches.\nDid you mean one of the following variations?", reply_markup=InlineKeyboardMarkup(btn))
     PM_SPELL_CHECK[reply_msg.id] = movielist
     
-    # Auto-delete the spell check recommendation panel after 10 minutes
-    asyncio.create_task(safe_delete(reply_msg, 600))
+    asyncio.create_task(safe_delete(reply_msg, DELETE_DELAY))

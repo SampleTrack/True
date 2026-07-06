@@ -52,6 +52,7 @@ SUPPORT_CHAT = environ.get('SUPPORT_CHAT', 'https://t.me/+QC05cUJqWFEyZDJl')
 LOG_CHANNEL = int(environ.get('LOG_CHANNEL', 0))
 P_TTI_SHOW_OFF = is_enabled((environ.get('P_TTI_SHOW_OFF', "False")), False)
 SINGLE_BUTTON = is_enabled((environ.get('SINGLE_BUTTON', "True")), True)
+PM_FILTER_ON = is_enabled(environ.get('PM_FILTER_ON', 'True'), True)
 CUSTOM_FILE_CAPTION = environ.get("CUSTOM_FILE_CAPTION", None)
 BATCH_FILE_CAPTION = environ.get("BATCH_FILE_CAPTION", CUSTOM_FILE_CAPTION)
 SPELL_CHECK_REPLY = is_enabled(environ.get("SPELL_CHECK_REPLY", "True"), True)
@@ -60,7 +61,6 @@ INDEX_REQ_CHANNEL = int(environ.get('INDEX_REQ_CHANNEL', LOG_CHANNEL))
 MELCOW_NEW_USERS = is_enabled((environ.get('MELCOW_NEW_USERS', "True")), True)
 PROTECT_CONTENT = is_enabled((environ.get('PROTECT_CONTENT', "False")), False)
 AUTO_DELETE = is_enabled((environ.get('AUTO_DELETE', "False")), False)
-
 REQ_CHANNEL = int(environ.get('REQ_CHANNEL', 0))
 
 LOG_STR = "Current Customized Configurations are:-\n"

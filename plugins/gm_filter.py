@@ -2,154 +2,260 @@ import asyncio
 import re
 import ast
 import math
-import aiohttp
+import logging
 from pyrogram.errors.exceptions.forbidden_403 import MessageDeleteForbidden
 from pyrogram.errors.exceptions.bad_request_400 import MediaEmpty, PhotoInvalidDimensions, WebpageMediaEmpty
 from Script import script
 import pyrogram
 from pyrogram.enums import MessageEntityType, ChatMemberStatus
-from info import ADMINS, AUTH_CHANNEL, UPDATE_CHANNEL, FILE_FORWARD, FILE_CHANNEL, AUTH_USERS, CUSTOM_FILE_CAPTION, AUTH_GROUPS, P_TTI_SHOW_OFF, IMDB, \
-    SINGLE_BUTTON, SPELL_CHECK_REPLY, IMDB_TEMPLATE, IS_VERIFY, HOW_TO_VERIFY, LOG_CHANNEL 
+from info import ADMINS, AUTH_CHANNEL, UPDATE_CHANNEL, FILE_FORWARD, FILE_CHANNEL, AUTH_USERS, CUSTOM_FILE_CAPTION, AUTH_GROUPS, P_TTI_SHOW_OFF, SINGLE_BUTTON, SPELL_CHECK_REPLY, IS_VERIFY, HOW_TO_VERIFY, LOG_CHANNEL 
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from pyrogram import Client, filters, enums
 from pyrogram.errors import FloodWait, UserIsBlocked, MessageNotModified, PeerIdInvalid
-from utils import get_size, is_subscribed, get_poster, search_gagala, temp, get_settings, save_group_settings, check_verification, get_token
+from utils import get_size, is_subscribed, search_gagala, temp, get_settings, save_group_settings, check_verification, get_token
 from database.users_chats_db import db
 from database.ia_filterdb import Media, get_file_details, get_search_results
-import logging
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.ERROR)
 
 BUTTONS = {}
 SPELL_CHECK = {}
+USER_SPAM_CACHE = {}  # Format: {chat_id: {user_id: (last_text, count)}}
 
+# --- UTILITY FUNCTIONS ---
 
-@Client.on_message(filters.group & filters.text & filters.incoming)
+async def safe_delete(message, delay: int = 0):
+    """Safely handles asynchronous background deletions with exception suppression."""
+    if delay > 0:
+        await asyncio.sleep(delay)
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+async def is_admin(client: Client, chat_id: int, user_id: int) -> bool:
+    """Fast cache-less check for administrative privileges."""
+    if user_id in ADMINS:
+        return True
+    try:
+        member = await client.get_chat_member(chat_id, user_id)
+        return member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]
+    except Exception:
+        return False
+
+def generate_file_buttons(files, pre, button_setting):
+    """Generates a standardized inline keyboard layout for files."""
+    if button_setting:
+        return [
+            [InlineKeyboardButton(text=f"[{get_size(file.file_size)}] {file.file_name}", callback_data=f'{pre}#{file.file_id}')]
+            for file in files
+        ]
+    return [
+        [
+            InlineKeyboardButton(text=f"{file.file_name}", callback_data=f'{pre}#{file.file_id}'),
+            InlineKeyboardButton(text=get_size(file.file_size), callback_data=f'{pre}#{file.file_id}')
+        ]
+        for file in files
+    ]
+
+async def deliver_file(client, query, file_id, ident, settings):
+    """Unified file delivery mechanism to eliminate code duplication."""
+    files_ = await get_file_details(file_id)
+    if not files_:
+        return await query.answer('No such file exists.', show_alert=True)
+    
+    file = files_[0]
+    title = file.file_name
+    size = get_size(file.file_size)
+    
+    # Process Verification Guard
+    if IS_VERIFY and not await check_verification(client, query.from_user.id):
+        btn = [[
+            InlineKeyboardButton("Verify", url=await get_token(client, query.from_user.id, f"https://telegram.me/{temp.U_NAME}?start=", file_id)),
+            InlineKeyboardButton("How To Verify", url=HOW_TO_VERIFY)
+        ]]
+        await client.send_message(
+            chat_id=query.from_user.id,
+            text="<b>You are not verified!\nKindly verify to continue to get access for 12 hours!</b>",
+            parse_mode=enums.ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(btn)
+        )
+        return await query.answer("Verification required! Check private messages.", show_alert=True)
+
+    try:
+        file_send = await client.send_cached_media(
+            chat_id=FILE_CHANNEL,
+            file_id=file_id,
+            caption=script.CHANNEL_CAP.format(query.from_user.mention, title, query.message.chat.title),
+            protect_content=True if ident in ["filep", "checksubp"] else False,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Update Channel", url=UPDATE_CHANNEL)],
+                [InlineKeyboardButton('Hindi', 'hin'), InlineKeyboardButton('Marathi', 'mar'), InlineKeyboardButton('Telugu', 'tel')]
+            ])
+        )
+        
+        info_msg = await query.message.reply_text(
+            script.FILE_MSG.format(query.from_user.mention, title, size),
+            parse_mode=enums.ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton('📥 Download Link 📥', url=file_send.link)],
+                [InlineKeyboardButton("⚠️ Can't Access ❓ Click Here ⚠️", url=FILE_FORWARD)]
+            ])
+        )
+        await query.answer('File routed to File Channel successfully!')
+        asyncio.create_task(safe_delete(info_msg, 600))
+        asyncio.create_task(safe_delete(file_send, 600))
+    except UserIsBlocked:
+        await query.answer('Unblock the bot to receive your files!', show_alert=True)
+    except Exception as e:
+        logger.exception(e)
+        await query.answer(url=f"https://t.me/{temp.U_NAME}?start={ident}_{file_id}")
+
+# --- MESSAGE FILTERS ---
+
+@Client.on_message(filters.group & filters.incoming)
 async def give_filter(client, message):
-    await db.track_user_activity(
-        message.from_user.id,
-        message.from_user.first_name or "User"
-    )
+    user_id = message.from_user.id if message.from_user else 0
+    chat_id = message.chat.id
 
-    if not message.text:
+    if not user_id:
         return
 
-    text = message.text.strip().lower()
+    await db.track_user_activity(user_id, message.from_user.first_name or "User")
 
-    if len(text) < 3:
+    # Step 1: Privilege Check
+    is_user_admin = await is_admin(client, chat_id, user_id)
+
+    # Step 2: Severe Structural/Spam Validations
+    if not is_user_admin:
+        # Check for forwards or unwanted message types
+        if message.forward_date or message.media:
+            return await safe_delete(message)
+
+        if not message.text:
+            return
+
+        text = message.text.strip()
+        text_lower = text.lower()
+
+        # Ban Patterns & URL Prevention
+        BAD_PATTERNS = ["@", "#", "www.", ".com", "http://", "https://", "t.me/"]
+        if any(x in text_lower for x in BAD_PATTERNS) or len(text) > 300:
+            return await safe_delete(message)
+
+        # Anti-Flood / Repetitive Text matching
+        user_cache = USER_SPAM_CACHE.setdefault(chat_id, {}).get(user_id, (None, 0))
+        if user_cache[0] == text_lower:
+            count = user_cache[1] + 1
+            USER_SPAM_CACHE[chat_id][user_id] = (text_lower, count)
+            if count >= 3:  # Delete third consecutive repeat
+                return await safe_delete(message)
+        else:
+            USER_SPAM_CACHE[chat_id][user_id] = (text_lower, 1)
+    else:
+        # If Admin, extract text safely without deletion risk
+        if not message.text:
+            return
+        text_lower = message.text.strip().lower()
+
+    # Step 3: Global Text Length & Common Phrase Skips
+    if len(text_lower) < 3 or text_lower.startswith(("/", "!", ".", ",")):
         return
 
-    if text.startswith(("/", "!", ".", ",")):
+    IGNORE_TEXTS = {"hi", "hello", "ok", "hmm", "thanks", "thank you", "good morning", "good night", "yes", "no", "lol"}
+    if text_lower in IGNORE_TEXTS:
         return
 
-    if "http://" in text or "https://" in text:
-        return
-
-    IGNORE_TEXTS = {
-        "hi", "hello", "ok", "hmm",
-        "thanks", "thank you",
-        "good morning", "good night",
-        "yes", "no", "lol"
-    }
-
-    if text in IGNORE_TEXTS:
-        return
-
-    BAD_PATTERNS = ["@", "#", "www.", ".com"]
-
-    if any(x in text for x in BAD_PATTERNS):
-        return
-
-    search = re.sub(r'[^a-zA-Z0-9 ]', '', text)
+    # Clean query for processing
+    search = re.sub(r'[^a-zA-Z0-9 ]', '', text_lower)
     search = " ".join(search.split())
-
     if not search:
         return
 
     await auto_filter(client, message)
 
 
+async def auto_filter(client, msg, spoll=False):
+    if not spoll:
+        message = msg
+        settings = await get_settings(message.chat.id)
+        if message.text.startswith("/"): 
+            return
+        search = message.text.lower()
+        files, offset, total_results = await get_search_results(search, offset=0, filter=True)
+        if not files:
+            if settings["spell_check"]:
+                return await advantage_spell_chok(msg)
+            return
+    else:
+        settings = await get_settings(msg.message.chat.id)
+        message = msg.message.reply_to_message
+        search, files, offset, total_results = spoll
+
+    pre = 'filep' if settings['file_secure'] else 'file'
+    btn = generate_file_buttons(files, pre, settings["button"])
+
+    # High-Performance UI Pagination
+    if offset != "":
+        key = f"{message.chat.id}-{message.id}"
+        BUTTONS[key] = search
+        req = message.from_user.id if message.from_user else 0
+        total_pages = math.ceil(int(total_results) / 10)
+        btn.append([
+            InlineKeyboardButton(text=f"📃 1 / {total_pages}", callback_data="pages"),
+            InlineKeyboardButton(text="NEXT ⏩", callback_data=f"next_{req}_{key}_{offset}")
+        ])
+    else:
+        btn.append([InlineKeyboardButton(text="📃 Page 1 / 1", callback_data="pages")])
+
+    cap = f"<b>✨ Here are the results for your query:</b> <code>{search}</code>"
+    
+    # IMDb Functionality Completely Stripped -> Instant processing
+    await message.reply_text(cap, parse_mode=enums.ParseMode.HTML, reply_markup=InlineKeyboardMarkup(btn))
+    if spoll:
+        await safe_delete(msg.message)
+
+
+# --- CALLBACK QUERY HANDLERS ---
+
 @Client.on_callback_query(filters.regex(r"^next"))
 async def next_page(bot, query):
-    ident, req, key, offset = query.data.split("_")
+    _, req, key, offset = query.data.split("_")
     if int(req) not in [query.from_user.id, 0]:
-        return await query.answer("oKda", show_alert=True)
-    try:
-        offset = int(offset)
-    except:
-        offset = 0
+        return await query.answer("This is not your request menu!", show_alert=True)
+    
+    offset = int(offset) if offset.isdigit() else 0
     search = BUTTONS.get(key)
     if not search:
-        await query.answer("You are using one of my old messages, please send the request again.", show_alert=True)
-        return
+        return await query.answer("Session expired. Please request the movie name again.", show_alert=True)
 
     files, n_offset, total = await get_search_results(search, offset=offset, filter=True)
-    try:
-        n_offset = int(n_offset)
-    except:
-        n_offset = 0
-
     if not files:
-        return
-    settings = await get_settings(query.message.chat.id)
-    if settings['button']:
-        btn = [
-            [
-                InlineKeyboardButton(
-                    text=f"[{get_size(file.file_size)}] {file.file_name}", 
-                    callback_data=f'files#{file.file_id}'
-                ),
-            ]
-            for file in files
-        ]
-    else:
-        btn = [
-            [
-                InlineKeyboardButton(
-                    text=f"{file.file_name}", 
-                    callback_data=f'files#{file.file_id}'
-                ),
-                InlineKeyboardButton(
-                    text=f"{get_size(file.file_size)}",
-                    callback_data=f'files_#{file.file_id}',
-                ),
-            ]
-            for file in files
-        ]
+        return await query.answer("No more files found.")
 
-    if 0 < offset <= 10:
-        off_set = 0
-    elif offset == 0:
-        off_set = None
-    else:
-        off_set = offset - 10
-    if n_offset == 0:
-        btn.append(
-            [
-                InlineKeyboardButton("⏪ BACK", callback_data=f"next_{req}_{key}_{off_set}"),
-                InlineKeyboardButton(f"📃 Pages {math.ceil(int(offset) / 10) + 1} / {math.ceil(total / 10)}", callback_data="pages")
-            ]
-        )
-    elif off_set is None:
-        btn.append(
-            [
-                InlineKeyboardButton(f"🗓 {math.ceil(int(offset) / 10) + 1} / {math.ceil(total / 10)}", callback_data="pages"),
-                InlineKeyboardButton("NEXT ⏩", callback_data=f"next_{req}_{key}_{n_offset}")
-            ]
-        )
-    else:
-        btn.append(
-            [
-                InlineKeyboardButton("⏪ BACK", callback_data=f"next_{req}_{key}_{off_set}"),
-                InlineKeyboardButton(f"🗓 {math.ceil(int(offset) / 10) + 1} / {math.ceil(total / 10)}", callback_data="pages"),
-                InlineKeyboardButton("NEXT ⏩", callback_data=f"next_{req}_{key}_{n_offset}")
-            ],
-        )
+    settings = await get_settings(query.message.chat.id)
+    pre = 'filep' if settings['file_secure'] else 'file'
+    btn = generate_file_buttons(files, pre, settings["button"])
+
+    n_offset = int(n_offset) if str(n_offset).isdigit() else 0
+    current_page = math.ceil(offset / 10) + 1
+    total_pages = math.ceil(total / 10)
+
+    # Simplified, Scalable Control Navigation Grid
+    nav_row = []
+    if offset > 0:
+        nav_row.append(InlineKeyboardButton("⏪ BACK", callback_data=f"next_{req}_{key}_{max(0, offset - 10)}"))
+    
+    nav_row.append(InlineKeyboardButton(f"📃 {current_page} / {total_pages}", callback_data="pages"))
+    
+    if n_offset > 0:
+        nav_row.append(InlineKeyboardButton("NEXT ⏩", callback_data=f"next_{req}_{key}_{n_offset}"))
+    
+    btn.append(nav_row)
+    
     try:
-        await query.edit_message_reply_markup(
-            reply_markup=InlineKeyboardMarkup(btn)
-        )
+        await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(btn))
     except MessageNotModified:
         pass
     await query.answer()
@@ -157,414 +263,116 @@ async def next_page(bot, query):
 
 @Client.on_callback_query(filters.regex(r"^spolling"))
 async def advantage_spoll_choker(bot, query):
-    _, user, movie_ = query.data.split('#')
+    _, user, movie_idx = query.data.split('#')
     if int(user) != 0 and query.from_user.id != int(user):
-        return await query.answer("okDa", show_alert=True)
-    if movie_ == "close_spellcheck":
-        return await query.message.delete()
+        return await query.answer("This search belongs to another user.", show_alert=True)
+        
+    if movie_idx == "close_spellcheck":
+        return await safe_delete(query.message)
+        
     movies = SPELL_CHECK.get(query.message.reply_to_message.id)
     if not movies:
-        return await query.answer("You are clicking on an old button which is expired.", show_alert=True)
-    movie = movies[(int(movie_))]
-    await query.answer('Checking for Movie in database...')
+        return await query.answer("This list has expired. Please type a new search.", show_alert=True)
+        
+    movie = movies[int(movie_idx)]
+    await query.answer('Searching database...')
+    
     files, offset, total_results = await get_search_results(movie, offset=0, filter=True)
     if files:
-        k = (movie, files, offset, total_results)
-        await auto_filter(bot, query, k)
+        await auto_filter(bot, query, (movie, files, offset, total_results))
     else:
-        k = await query.message.edit('This Movie Not Found In DataBase')
-        await asyncio.sleep(10)
-        await k.delete()
+        err_msg = await query.message.edit('The requested title does not match items in database.')
+        asyncio.create_task(safe_delete(err_msg, 5))
 
 
 @Client.on_callback_query(group=1)
 async def cb_handler(client: Client, query: CallbackQuery):
     if query.data == "close_data":
-        await query.message.delete()
-    if query.data.startswith("file"):
-        user_id = query.from_user.id
-        clicked = query.from_user.id
-        try:
-            typed = query.message.reply_to_message.from_user.id
-        except:
-            typed = query.from_user.id
+        await safe_delete(query.message)
+        return
+
+    if query.data.startswith(("file", "checksub")):
         ident, file_id = query.data.split("#")
-        files_ = await get_file_details(file_id)
-        if not files_:
-            return await query.answer('No such file exists.')
-        files = files_[0]
-        title = files.file_name
-        size = get_size(files.file_size)
-        f_caption = files.caption
         settings = await get_settings(query.message.chat.id)
-        if CUSTOM_FILE_CAPTION:
-            try:
-                f_caption = CUSTOM_FILE_CAPTION.format(file_name='' if title is None else title,
-                                                       file_size='' if size is None else size,
-                                                       file_caption='' if f_caption is None else f_caption)
-            except Exception as e:
-                logger.exception(e)
-            f_caption = f_caption
-        if f_caption is None:
-            f_caption = f"{files.file_name}"
-    
-        try:
-            if AUTH_CHANNEL and not await is_subscribed(client, query):
-                if clicked == typed:
-                    await query.answer(url=f"https://t.me/{temp.U_NAME}?start={ident}_{file_id}")
-                    return
-                else:
-                    await query.answer(f"Hey {query.from_user.first_name}, This is not your movie request. Request yours!", show_alert=True)
-            elif IS_VERIFY and not await check_verification(client, query.from_user.id):
-                await query.answer(url=f"https://t.me/{temp.U_NAME}?start={ident}_{file_id}")
-                return
-            elif settings['botpm']:
-                if clicked == typed:
-                    await query.answer(url=f"https://t.me/{temp.U_NAME}?start={ident}_{file_id}")
-                    return
-                else:
-                    await query.answer(f"Hey {query.from_user.first_name}, This is not your movie request. Request yours!", show_alert=True)
-            else:
-                if clicked == typed:
-                    file_send = await client.send_cached_media(
-                        chat_id=FILE_CHANNEL,
-                        file_id=file_id,
-                        caption=script.CHANNEL_CAP.format(query.from_user.mention, title, query.message.chat.title),
-                        protect_content=True if ident == "filep" else False,
-                        reply_markup=InlineKeyboardMarkup(
-                            [
-                                [
-                                    InlineKeyboardButton("Update Channel", url=UPDATE_CHANNEL)
-                                ],
-                                [
-                                    InlineKeyboardButton(f'Hindi', 'hin'),
-                                    InlineKeyboardButton(f'Marathi', 'mar'),
-                                    InlineKeyboardButton(f'Telugu', 'tel')
-                                ]
-                            ]
-                        )
-                    )
-                    Joel_tgx = await query.message.reply_text(
-                        script.FILE_MSG.format(query.from_user.mention, title, size),
-                        parse_mode=enums.ParseMode.HTML,
-                        reply_markup=InlineKeyboardMarkup(
-                            [
-                                [
-                                    InlineKeyboardButton('📥 Download Link 📥', url=file_send.link)
-                                ],
-                                [
-                                    InlineKeyboardButton("⚠️ Can't Access ❓ Click Here ⚠️", url=FILE_FORWARD)
-                                ]
-                            ]
-                        )
-                    )
-                    await query.answer('Check PM, I have sent files in File Channel')
-                    await asyncio.sleep(600)
-                    await Joel_tgx.delete()
-                    await file_send.delete()
-                else:
-                    return await query.answer(f"Hey {query.from_user.first_name}, This is not your movie request. Request yours!", show_alert=True)
-        except UserIsBlocked:
-            await query.answer('Unblock the bot mahnn!', show_alert=True)
-        except PeerIdInvalid:
-            await query.answer(url=f"https://t.me/{temp.U_NAME}?start={ident}_{file_id}")
-        except Exception as e:
-            await query.answer(url=f"https://t.me/{temp.U_NAME}?start={ident}_{file_id}")
-            
-    elif query.data.startswith("checksub"):
-        if AUTH_CHANNEL and not await is_subscribed(client, query):
-            await query.answer("Join our backup channel!", show_alert=True)
-            return
-        ident, file_id = query.data.split("#")
-        files_ = await get_file_details(file_id)
-        if not files_:
-            return await query.answer('No such file exists.')
-        files = files_[0]
-        title = files.file_name
-        size = get_size(files.file_size)
-        f_caption = files.caption
-        if CUSTOM_FILE_CAPTION:
-            try:
-                f_caption = CUSTOM_FILE_CAPTION.format(file_name='' if title is None else title,
-                                                       file_size='' if size is None else size,
-                                                       file_caption='' if f_caption is None else f_caption)
-            except Exception as e:
-                logger.exception(e)
-                f_caption = f_caption
-        if f_caption is None:
-            f_caption = f"{title}"
-        await query.answer()
-        if IS_VERIFY and not await check_verification(client, query.from_user.id):
-            btn = [[
-                InlineKeyboardButton("Verify", url=await get_token(client, query.from_user.id, f"https://telegram.me/{temp.U_NAME}?start=", file_id)),
-                InlineKeyboardButton("How To Verify", url=HOW_TO_VERIFY)
-            ]]
-            await client.send_message(
-                chat_id=query.from_user.id,
-                text="<b>You are not verified!\nKindly verify to continue so that you can get access to unlimited movies until 12 hours from now!</b>",
-                protect_content=True if ident == 'checksubp' else False,
-                disable_web_page_preview=True,
-                parse_mode=enums.ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup(btn)
-            )
-            return
-        file_sendpm = await client.send_cached_media(
-            chat_id=FILE_CHANNEL,
-            file_id=file_id,
-            caption=script.CHANNEL_CAP.format(query.from_user.mention, title, query.message.chat.title),
-            protect_content=True if ident == 'checksubp' else False,
-            reply_markup=InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton("Update Channel", url=UPDATE_CHANNEL)
-                    ],
-                    [
-                        InlineKeyboardButton(f'Hindi', 'hin'),
-                        InlineKeyboardButton(f'Marathi', 'mar'),
-                        InlineKeyboardButton(f'Telugu', 'tel')
-                    ]
-                ]
-            )
-        )
-        Joel_tgxpm = await query.message.reply_text(
-            script.FILE_MSG.format(query.from_user.mention, title, size),
-            parse_mode=enums.ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton('📥 Download Link 📥', url=file_sendpm.link)
-                    ],
-                    [
-                        InlineKeyboardButton("⚠️ Can't Access ❓ Click Here ⚠️", url=FILE_FORWARD)
-                    ]
-                ]
-            )
-        )
-        await query.answer('Check PM, I have sent files in File Channel')
-        await asyncio.sleep(600)
-        await Joel_tgxpm.delete()
-        await file_sendpm.delete()
         
-    elif query.data == "pages":
-        await query.answer()
-        
-    elif query.data == "tel":
-        await query.answer(
-            "కాపీరైట్ కారణంగా ఈ ఫైల్ 10 నిమిషాల్లో తొలగిపోతుంది, కానీ దానిని ఇక్కడికి తీసుకోవడానికి లేదా సేవ్డ్ సందేశాలలో పంపించండి మరియు డౌన్లోడ్ చేయండి!",
-            show_alert=True)
-
-    elif query.data == "mar":
-        await query.answer(
-            "कॉपीराइट मुळे ही फाइल येथून 10 मिनिटांत डिलिट केली जाईल, म्हणुन तुम्ही इथून इतर कुठे किंवा **Saved Messages** मध्ये पाठवून डाउनलोड करू शकता.",
-            show_alert=True)
-
-    elif query.data == "hin":
-        await query.answer(
-            "कॉपीराइट के कारण फ़ाइल यहां से 10 मिनट में डिलीट हो जाएगी इसलिए यहां से कहीं और ले जाकर या **Saved Messages** मे भेज कर डाउनलोड करें!",
-            show_alert=True)
-            
-    elif query.data == "start":
-        buttons = [[
-            InlineKeyboardButton('➕ Add Me To Your Groups ➕', url=f'http://t.me/{temp.U_NAME}?startgroup=true')
-        ], [
-            InlineKeyboardButton('ℹ️ Help', callback_data='help'),
-            InlineKeyboardButton('😊 About', callback_data='about')
-        ]]
-        reply_markup = InlineKeyboardMarkup(buttons)
-        await query.message.edit_text(
-            text=script.START_TXT.format(query.from_user.mention, temp.U_NAME, temp.B_NAME),
-            reply_markup=reply_markup,
-            parse_mode=enums.ParseMode.HTML
-        )
-        await query.answer('Proceeding...')
-    elif query.data == "help":
-        buttons = [[
-            InlineKeyboardButton('🏠 Home', callback_data='start'),
-            InlineKeyboardButton('🔐 Close', callback_data='close_data')
-        ]]
-        reply_markup = InlineKeyboardMarkup(buttons)
-        await query.message.edit_text(
-            text=script.HELP_TXT.format(query.from_user.mention),
-            reply_markup=reply_markup,
-            parse_mode=enums.ParseMode.HTML
-        )
-    elif query.data == "about":
-        buttons = [[
-            InlineKeyboardButton('🏠 Home', callback_data='start'),
-            InlineKeyboardButton('🔐 Close', callback_data='close_data')
-        ]]
-        reply_markup = InlineKeyboardMarkup(buttons)
-        await query.message.edit_text(
-            text=script.ABOUT_TXT.format(temp.B_NAME),
-            reply_markup=reply_markup,
-            parse_mode=enums.ParseMode.HTML
-        )
-
-async def auto_filter(client, msg, spoll=False):
-    if not spoll:
-        message = msg
-        settings = await get_settings(message.chat.id)
-        if message.text.startswith("/"): return  # ignore commands
-        if re.findall(r"((^\/|^,|^!|^\.|^[\U0001F600-\U000E007F]).*)", message.text):
-            return
-        if 2 < len(message.text) < 100:
-            search = message.text
-            files, offset, total_results = await get_search_results(search.lower(), offset=0, filter=True)
-            if not files:
-                if settings["spell_check"]:
-                    return await advantage_spell_chok(msg)
-                else:
-                    return
-        else:
-            return
-    else:
-        settings = await get_settings(msg.message.chat.id)
-        message = msg.message.reply_to_message  # msg will be callback query
-        search, files, offset, total_results = spoll
-    pre = 'filep' if settings['file_secure'] else 'file'
-    if settings["button"]:
-        btn = [
-            [
-                InlineKeyboardButton(
-                    text=f"[{get_size(file.file_size)}] {file.file_name}", 
-                    callback_data=f'{pre}#{file.file_id}'
-                ),
-            ]
-            for file in files
-        ]
-    else:
-        btn = [
-            [
-                InlineKeyboardButton(
-                    text=f"{file.file_name}",
-                    callback_data=f'{pre}#{file.file_id}',
-                ),
-                InlineKeyboardButton(
-                    text=f"{get_size(file.file_size)}",
-                    callback_data=f'{pre}#{file.file_id}',
-                ),
-            ]
-            for file in files
-        ]
-
-    if offset != "":
-        key = f"{message.chat.id}-{message.id}"
-        BUTTONS[key] = search
-        req = message.from_user.id if message.from_user else 0
-        btn.append(
-            [
-                InlineKeyboardButton(text=f"🗓 1/{math.ceil(int(total_results) / 10)}", callback_data="pages"),
-                InlineKeyboardButton(text="NEXT ⏩", callback_data=f"next_{req}_{key}_{offset}")
-            ]
-        )
-    else:
-        btn.append(
-            [InlineKeyboardButton(text="🗓 1/1", callback_data="pages")]
-        )
-    imdb = await get_poster(search, file=(files[0]).file_name) if settings["imdb"] else None
-    TEMPLATE = settings['template']
-    if imdb:
-        cap = TEMPLATE.format(
-            query=search,
-            title=imdb['title'],
-            votes=imdb['votes'],
-            aka=imdb["aka"],
-            seasons=imdb["seasons"],
-            box_office=imdb['box_office'],
-            localized_title=imdb['localized_title'],
-            kind=imdb['kind'],
-            imdb_id=imdb["imdb_id"],
-            cast=imdb["cast"],
-            runtime=imdb["runtime"],
-            countries=imdb["countries"],
-            certificates=imdb["certificates"],
-            languages=imdb["languages"],
-            director=imdb["director"],
-            writer=imdb["writer"],
-            producer=imdb["producer"],
-            composer=imdb["composer"],
-            cinematographer=imdb["cinematographer"],
-            music_team=imdb["music_team"],
-            distributors=imdb["distributors"],
-            release_date=imdb['release_date'],
-            year=imdb['year'],
-            genres=imdb['genres'],
-            poster=imdb['poster'],
-            plot=imdb['plot'],
-            rating=imdb['rating'],
-            url=imdb['url'],
-            **locals()
-        )
-    else:
-        cap = f"Here is what i found for your query {search}"
-    if imdb and imdb.get('poster'):
+        # Verify user alignment permissions
         try:
-            await message.reply_photo(photo=imdb.get('poster'), caption=cap[:1024],
-                                      reply_markup=InlineKeyboardMarkup(btn))
-        except (MediaEmpty, PhotoInvalidDimensions, WebpageMediaEmpty):
-            pic = imdb.get('poster')
-            poster = pic.replace('.jpg', "._V1_UX360.jpg")
-            await message.reply_photo(photo=poster, caption=cap[:1024], reply_markup=InlineKeyboardMarkup(btn))
-        except Exception as e:
-            logger.exception(e)
-            await message.reply_text(cap, reply_markup=InlineKeyboardMarkup(btn))
-    else:
-        await message.reply_text(cap, reply_markup=InlineKeyboardMarkup(btn))
-    if spoll:
-        await msg.message.delete()
+            target_user = query.message.reply_to_message.from_user.id
+        except Exception:
+            target_user = query.from_user.id
 
+        if settings.get('botpm') or AUTH_CHANNEL:
+            if query.from_user.id != target_user:
+                return await query.answer("This is not your movie choice. Submit your own request!", show_alert=True)
+        
+        await deliver_file(client, query, file_id, ident, settings)
+        
+    elif query.data in ["hin", "mar", "tel"]:
+        alerts = {
+            "hin": "कॉपीराइट के कारण फ़ाइल 10 मिनट में डिलीट हो जाएगी, इसे Saved Messages में सुरक्षित करें!",
+            "mar": "कॉपीराइट मुळे ही फाइल 10 मिनिटांत डिलिट केली जाईल, Saved Messages मध्ये पाठवून डाउनलोड करा.",
+            "tel": "కాపీరైట్ కారణంగా ఈ ఫైల్ 10 నిమిషాల్లో తొలగిపోతుంది, సేవ్డ్ సందేశాలలో పంపించండి!"
+        }
+        await query.answer(alerts[query.data], show_alert=True)
+            
+    elif query.data in ["start", "help", "about"]:
+        text_map = {
+            "start": (script.START_TXT.format(query.from_user.mention, temp.U_NAME, temp.B_NAME) if hasattr(script, 'START_TXT') else "Welcome"),
+            "help": (script.HELP_TXT.format(query.from_user.mention) if hasattr(script, 'HELP_TXT') else "Help Manual"),
+            "about": (script.ABOUT_TXT.format(temp.B_NAME) if hasattr(script, 'ABOUT_TXT') else "About Info")
+        }
+        buttons_map = {
+            "start": [
+                [InlineKeyboardButton('➕ Add Me To Your Groups ➕', url=f'http://t.me/{temp.U_NAME}?startgroup=true')],
+                [InlineKeyboardButton('ℹ️ Help', callback_data='help'), InlineKeyboardButton('😊 About', callback_data='about')]
+            ],
+            "help": [[InlineKeyboardButton('🏠 Home', callback_data='start'), InlineKeyboardButton('🔐 Close', callback_data='close_data')]],
+            "about": [[InlineKeyboardButton('🏠 Home', callback_data='start'), InlineKeyboardButton('🔐 Close', callback_data='close_data')]]
+        }
+        await query.message.edit_text(
+            text=text_map[query.data],
+            reply_markup=InlineKeyboardMarkup(buttons_map[query.data]),
+            parse_mode=enums.ParseMode.HTML
+        )
+        await query.answer()
+
+# --- OPTIMIZED SPELL CHECK SYSTEM ---
 
 async def advantage_spell_chok(msg):
-    query = re.sub(
-        r"\b(pl(i|e)*?(s|z+|ease|se|ese|(e+)s(e)?)|((send|snd|giv(e)?|gib)(\sme)?)|movie(s)?|new|latest|br((o|u)h?)*|^h(e|a)?(l)*(o)*|mal(ayalam)?|t(h)?amil|file|that|find|und(o)*|kit(t(i|y)?)?o(w)?|thar(u)?(o)*w?|kittum(o)*|aya(k)*(um(o)*)?|full\smovie|any(one)|with\ssubtitle(s)?)",
-        "", msg.text, flags=re.IGNORECASE)  # plis contribute some common words
-    query = query.strip() + " movie"
-    g_s = await search_gagala(query)
-    g_s += await search_gagala(msg.text)
-    gs_parsed = []
+    # Fast regex cleanup eliminating boilerplate text phrases
+    clean_regex = r"\b(pl(i|e)*?(s|z+|ease|se|ese)|((send|snd|giv(e)?|gib)(\sme)?)|movie(s)?|new|latest|br((o|u)h?)*|h(e|a)?(l)*(o)*|file|find|full\smovie|any(one)|with\ssubtitle(s)?)"
+    query = re.sub(clean_regex, "", msg.text, flags=re.IGNORECASE).strip()
+    
+    if not query:
+        return
+        
+    g_s = await search_gagala(f"{query} movie") + await search_gagala(msg.text)
     if not g_s:
-        k = await msg.reply("I couldn't find any movie in that name.")
-        await asyncio.sleep(8)
-        await k.delete()
+        err = await msg.reply("No records matches found for spelling alternatives.")
+        asyncio.create_task(safe_delete(err, 8))
         return
-    regex = re.compile(r".*(imdb|wikipedia).*", re.IGNORECASE)  # look for imdb / wiki results
-    gs = list(filter(regex.match, g_s))
-    gs_parsed = [re.sub(
-        r'\b(\-([a-zA-Z-\s])\-\simdb|(\-\s)?imdb|(\-\s)?wikipedia|\(|\)|\-|reviews|full|all|episode(s)?|film|movie|series)',
-        '', i, flags=re.IGNORECASE) for i in gs]
-    if not gs_parsed:
-        reg = re.compile(r"watch(\s[a-zA-Z0-9_\s\-\(\)]*)*\|.*",
-                         re.IGNORECASE)  # match something like Watch Niram | Amazon Prime
-        for mv in g_s:
-            match = reg.match(mv)
-            if match:
-                gs_parsed.append(match.group(1))
-    user = msg.from_user.id if msg.from_user else 0
-    movielist = []
-    gs_parsed = list(dict.fromkeys(gs_parsed))  # removing duplicates https://stackoverflow.com/a/7961425
-    if len(gs_parsed) > 3:
-        gs_parsed = gs_parsed[:3]
-    if gs_parsed:
-        for mov in gs_parsed:
-            imdb_s = await get_poster(mov.strip(), bulk=True)  # searching each keyword in imdb
-            if imdb_s:
-                movielist += [movie.get('title') for movie in imdb_s]
-    movielist += [(re.sub(r'(\-|\(|\)|_)', '', i, flags=re.IGNORECASE)).strip() for i in gs_parsed]
-    movielist = list(dict.fromkeys(movielist))  # removing duplicates
+
+    # Extracted filter loops targeting pure alphanumeric structural terms
+    regex_filter = re.compile(r".*(imdb|wikipedia).*", re.IGNORECASE)
+    gs = list(filter(regex_filter.match, g_s))
+    
+    gs_parsed = [
+        re.sub(r'\b(\-([a-zA-Z-\s])\-\simdb|(\-\s)?imdb|(\-\s)?wikipedia|\(|\)|\-|reviews|full|all|episode(s)?|film|movie|series)', '', i, flags=re.IGNORECASE).strip()
+        for i in gs
+    ]
+    
+    # De-duplicate entries cleanly 
+    movielist = list(dict.fromkeys([m for m in gs_parsed if m]))[:3]
+    
     if not movielist:
-        k = await msg.reply("I couldn't find anything related to that. Check your spelling")
-        await asyncio.sleep(8)
-        await k.delete()
+        err = await msg.reply("Spelling configuration unresolvable. Double check request text.")
+        asyncio.create_task(safe_delete(err, 8))
         return
+
     SPELL_CHECK[msg.id] = movielist
-    btn = [[
-        InlineKeyboardButton(
-            text=movie.strip(),
-            callback_data=f"spolling#{user}#{k}",
-        )
-    ] for k, movie in enumerate(movielist)]
+    user = msg.from_user.id if msg.from_user else 0
+    
+    btn = [[InlineKeyboardButton(text=movie, callback_data=f"spolling#{user}#{idx}")] for idx, movie in enumerate(movielist)]
     btn.append([InlineKeyboardButton(text="Close", callback_data=f'spolling#{user}#close_spellcheck')])
-    await msg.reply("I couldn't find anything related to that\nDid you mean any one of these?",
-                    reply_markup=InlineKeyboardMarkup(btn))
-
-
+    
+    await msg.reply("I couldn't locate structural records matches.\nDid you intend one of the following?", reply_markup=InlineKeyboardMarkup(btn))

@@ -22,6 +22,7 @@ logger.setLevel(logging.ERROR)
 BUTTONS = {}
 SPELL_CHECK = {}
 USER_SPAM_CACHE = {}  # Format: {chat_id: {user_id: (last_text, count)}}
+DELETE_DELAY = 600    # Global configuration: Auto-delete lifetime for text logs (10 minutes)
 
 # --- UTILITY FUNCTIONS ---
 
@@ -75,12 +76,13 @@ async def deliver_file(client, query, file_id, ident, settings):
             InlineKeyboardButton("Verify", url=await get_token(client, query.from_user.id, f"https://telegram.me/{temp.U_NAME}?start=", file_id)),
             InlineKeyboardButton("How To Verify", url=HOW_TO_VERIFY)
         ]]
-        await client.send_message(
+        verify_msg = await client.send_message(
             chat_id=query.from_user.id,
             text="<b>You are not verified!\nKindly verify to continue to get access for 12 hours!</b>",
             parse_mode=enums.ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup(btn)
         )
+        asyncio.create_task(safe_delete(verify_msg, DELETE_DELAY))
         return await query.answer("Verification required! Check private messages.", show_alert=True)
 
     try:
@@ -104,8 +106,8 @@ async def deliver_file(client, query, file_id, ident, settings):
             ])
         )
         await query.answer('File routed to File Channel successfully!')
-        asyncio.create_task(safe_delete(info_msg, 600))
-        asyncio.create_task(safe_delete(file_send, 600))
+        asyncio.create_task(safe_delete(info_msg, DELETE_DELAY))
+        asyncio.create_task(safe_delete(file_send, DELETE_DELAY))
     except UserIsBlocked:
         await query.answer('Unblock the bot to receive your files!', show_alert=True)
     except Exception as e:
@@ -129,7 +131,6 @@ async def give_filter(client, message):
 
     # Step 2: Severe Structural/Spam Validations
     if not is_user_admin:
-        # Check for forwards or unwanted message types
         if message.forward_date or message.media:
             return await safe_delete(message)
 
@@ -154,7 +155,6 @@ async def give_filter(client, message):
         else:
             USER_SPAM_CACHE[chat_id][user_id] = (text_lower, 1)
     else:
-        # If Admin, extract text safely without deletion risk
         if not message.text:
             return
         text_lower = message.text.strip().lower()
@@ -173,22 +173,28 @@ async def give_filter(client, message):
     if not search:
         return
 
+    # Trigger baseline user search loop
     await auto_filter(client, message)
 
 
 async def auto_filter(client, msg, spoll=False):
+    # Setup placeholder message instantly to retain user attention
     if not spoll:
+        status_msg = await msg.reply_text("<b>🔍 Searching database, please wait...</b>", parse_mode=enums.ParseMode.HTML)
         message = msg
         settings = await get_settings(message.chat.id)
         if message.text.startswith("/"): 
+            asyncio.create_task(safe_delete(status_msg))
             return
         search = message.text.lower()
         files, offset, total_results = await get_search_results(search, offset=0, filter=True)
         if not files:
+            asyncio.create_task(safe_delete(status_msg))
             if settings["spell_check"]:
                 return await advantage_spell_chok(msg)
             return
     else:
+        status_msg = await msg.message.edit('<b>🔍 Sifting structural index matching...</b>', parse_mode=enums.ParseMode.HTML)
         settings = await get_settings(msg.message.chat.id)
         message = msg.message.reply_to_message
         search, files, offset, total_results = spoll
@@ -211,8 +217,13 @@ async def auto_filter(client, msg, spoll=False):
 
     cap = f"<b>✨ Here are the results for your query:</b> <code>{search}</code>"
     
-    # IMDb Functionality Completely Stripped -> Instant processing
-    await message.reply_text(cap, parse_mode=enums.ParseMode.HTML, reply_markup=InlineKeyboardMarkup(btn))
+    # Edit the loading sequence placeholder with final database matches
+    await status_msg.edit_text(cap, parse_mode=enums.ParseMode.HTML, reply_markup=InlineKeyboardMarkup(btn))
+    
+    # Schedule structural cleanups for conversational clarity
+    asyncio.create_task(safe_delete(message, DELETE_DELAY))
+    asyncio.create_task(safe_delete(status_msg, DELETE_DELAY))
+    
     if spoll:
         await safe_delete(msg.message)
 
@@ -242,7 +253,6 @@ async def next_page(bot, query):
     current_page = math.ceil(offset / 10) + 1
     total_pages = math.ceil(total / 10)
 
-    # Simplified, Scalable Control Navigation Grid
     nav_row = []
     if offset > 0:
         nav_row.append(InlineKeyboardButton("⏪ BACK", callback_data=f"next_{req}_{key}_{max(0, offset - 10)}"))
@@ -295,7 +305,6 @@ async def cb_handler(client: Client, query: CallbackQuery):
         ident, file_id = query.data.split("#")
         settings = await get_settings(query.message.chat.id)
         
-        # Verify user alignment permissions
         try:
             target_user = query.message.reply_to_message.from_user.id
         except Exception:
@@ -339,7 +348,6 @@ async def cb_handler(client: Client, query: CallbackQuery):
 # --- OPTIMIZED SPELL CHECK SYSTEM ---
 
 async def advantage_spell_chok(msg):
-    # Fast regex cleanup eliminating boilerplate text phrases
     clean_regex = r"\b(pl(i|e)*?(s|z+|ease|se|ese)|((send|snd|giv(e)?|gib)(\sme)?)|movie(s)?|new|latest|br((o|u)h?)*|h(e|a)?(l)*(o)*|file|find|full\smovie|any(one)|with\ssubtitle(s)?)"
     query = re.sub(clean_regex, "", msg.text, flags=re.IGNORECASE).strip()
     
@@ -349,10 +357,10 @@ async def advantage_spell_chok(msg):
     g_s = await search_gagala(f"{query} movie") + await search_gagala(msg.text)
     if not g_s:
         err = await msg.reply("No records matches found for spelling alternatives.")
+        asyncio.create_task(safe_delete(msg, DELETE_DELAY))
         asyncio.create_task(safe_delete(err, 8))
         return
 
-    # Extracted filter loops targeting pure alphanumeric structural terms
     regex_filter = re.compile(r".*(imdb|wikipedia).*", re.IGNORECASE)
     gs = list(filter(regex_filter.match, g_s))
     
@@ -361,11 +369,11 @@ async def advantage_spell_chok(msg):
         for i in gs
     ]
     
-    # De-duplicate entries cleanly 
     movielist = list(dict.fromkeys([m for m in gs_parsed if m]))[:3]
     
     if not movielist:
         err = await msg.reply("Spelling configuration unresolvable. Double check request text.")
+        asyncio.create_task(safe_delete(msg, DELETE_DELAY))
         asyncio.create_task(safe_delete(err, 8))
         return
 
@@ -375,4 +383,8 @@ async def advantage_spell_chok(msg):
     btn = [[InlineKeyboardButton(text=movie, callback_data=f"spolling#{user}#{idx}")] for idx, movie in enumerate(movielist)]
     btn.append([InlineKeyboardButton(text="Close", callback_data=f'spolling#{user}#close_spellcheck')])
     
-    await msg.reply("I couldn't locate structural records matches.\nDid you intend one of the following?", reply_markup=InlineKeyboardMarkup(btn))
+    spell_msg = await msg.reply("I couldn't locate structural records matches.\nDid you intend one of the following?", reply_markup=InlineKeyboardMarkup(btn))
+    
+    # Auto-delete spell check sequence if left unaddressed
+    asyncio.create_task(safe_delete(msg, DELETE_DELAY))
+    asyncio.create_task(safe_delete(spell_msg, DELETE_DELAY))

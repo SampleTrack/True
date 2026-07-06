@@ -1,7 +1,6 @@
 import logging
 from pyrogram.errors import InputUserDeactivated, UserNotParticipant, FloodWait, UserIsBlocked, PeerIdInvalid
-from info import AUTH_CHANNEL, LONG_IMDB_DESCRIPTION, MAX_LIST_ELM, LOG_CHANNEL
-from imdb import IMDb
+from info import AUTH_CHANNEL, MAX_LIST_ELM, LOG_CHANNEL
 import asyncio
 import string
 import aiohttp
@@ -20,8 +19,6 @@ from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
-
-imdb = IMDb() 
 
 TOKENS = {}
 VERIFIED = {}
@@ -56,7 +53,6 @@ async def add_new_user(client, user):
     today = now.date()
     time_str = now.strftime('%I:%M:%S %p')
     total_users = await db.total_users_count()
-    # FIX: removed incorrect +1; DB count is accurate as-is
     daily_users = await db.daily_users_count(today)
     await db.add_user(user.id, user.first_name)
     await client.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(
@@ -84,85 +80,6 @@ async def is_subscribed(bot, query):
         if user.status != enums.ChatMemberStatus.BANNED:
             return True
     return False
-
-async def get_poster(query, bulk=False, id=False, file=None):
-    if not id:
-        query = (query.strip()).lower()
-        title = query
-        year = re.findall(r'[1-2]\d{3}$', query, re.IGNORECASE)
-        if year:
-            year = list_to_str(year[:1])
-            title = (query.replace(year, "")).strip()
-        elif file is not None:
-            year = re.findall(r'[1-2]\d{3}', file, re.IGNORECASE)
-            if year:
-                year = list_to_str(year[:1]) 
-        else:
-            year = None
-        movieid = imdb.search_movie(title.lower(), results=10)
-        if not movieid:
-            return None
-        if year:
-            filtered = list(filter(lambda k: str(k.get('year')) == str(year), movieid))
-            if not filtered:
-                filtered = movieid
-        else:
-            filtered = movieid
-        movieid = list(filter(lambda k: k.get('kind') in ['movie', 'tv series'], filtered))
-        if not movieid:
-            movieid = filtered
-        if bulk:
-            return movieid
-        movieid = movieid[0].movieID
-    else:
-        movieid = query
-    movie = imdb.get_movie(movieid)
-    if movie.get("original air date"):
-        date_val = movie["original air date"]
-    elif movie.get("year"):
-        date_val = movie.get("year")
-    else:
-        date_val = "N/A"
-    plot = ""
-    if not LONG_IMDB_DESCRIPTION:
-        plot = movie.get('plot')
-        if plot and len(plot) > 0:
-            plot = plot[0]
-    else:
-        plot = movie.get('plot outline')
-    if plot and len(plot) > 800:
-        plot = plot[0:800] + "..."
-
-    return {
-        'title': movie.get('title'),
-        'votes': movie.get('votes'),
-        "aka": list_to_str(movie.get("akas")),
-        "seasons": movie.get("number of seasons"),
-        "box_office": movie.get('box office'),
-        'localized_title': movie.get('localized title'),
-        'kind': movie.get("kind"),
-        "imdb_id": f"tt{movie.get('imdbID')}",
-        "cast": list_to_str(movie.get("cast")),
-        "runtime": list_to_str(movie.get("runtimes")),
-        "countries": list_to_str(movie.get("countries")),
-        "certificates": list_to_str(movie.get("certificates")),
-        "languages": list_to_str(movie.get("languages")),
-        "director": list_to_str(movie.get("director")),
-        "writer": list_to_str(movie.get("writer")),
-        "producer": list_to_str(movie.get("producer")),
-        "composer": list_to_str(movie.get("composer")),
-        "cinematographer": list_to_str(movie.get("cinematographer")),
-        "music_team": list_to_str(movie.get("music department")),
-        "distributors": list_to_str(movie.get("distributors")),
-        'release_date': date_val,
-        'year': movie.get('year'),
-        'genres': list_to_str(movie.get("genres")),
-        'poster': movie.get('full-size cover url'),
-        'plot': plot,
-        'rating': str(movie.get("rating")),
-        'url': f'https://www.imdb.com/title/tt{movieid}'
-    }
-
 
 async def search_gagala(text):
     usr_agent = {
@@ -200,7 +117,6 @@ def get_size(size):
     units = ["Bytes", "KB", "MB", "GB", "TB", "PB", "EB"]
     size = float(size)
     i = 0
-    # FIX: use len(units) - 1 to prevent IndexError on very large sizes
     while size >= 1024.0 and i < len(units) - 1:
         i += 1
         size /= 1024.0
@@ -252,7 +168,6 @@ def list_to_str(k):
         return str(k[0])
     elif MAX_LIST_ELM:
         k = k[:int(MAX_LIST_ELM)]
-    # FIX: proper comma-separated join without trailing comma
     return ', '.join(str(elem) for elem in k)
 
 def last_online(from_user):
@@ -279,7 +194,6 @@ def humanbytes(size):
         return ""
     power = 2**10
     n = 0
-    # FIX: cap at 4 (Ti) to prevent KeyError beyond dict range
     Dic_powerN = {0: ' ', 1: 'Ki', 2: 'Mi', 3: 'Gi', 4: 'Ti'}
     while size > power and n < 4:
         size /= power
@@ -305,7 +219,6 @@ async def verify_user(bot, userid, token):
     user = await bot.get_users(int(userid))
     if not await db.is_user_exist(user.id):
         await db.add_user(user.id, user.first_name)
-        # FIX: use named args to match LOG_TEXT_P template placeholders
         await bot.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(
             a=user.id, b=user.mention, c=getattr(user, 'username', 'N/A'),
             d='N/A', e='N/A', f='N/A', g='N/A', h=temp.U_NAME
@@ -322,7 +235,6 @@ async def check_token(bot, userid, token):
     user = await bot.get_users(userid)
     if not await db.is_user_exist(user.id):
         await db.add_user(user.id, user.first_name)
-        # FIX: use named args to match LOG_TEXT_P template placeholders
         await bot.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(
             a=user.id, b=user.mention, c=getattr(user, 'username', 'N/A'),
             d='N/A', e='N/A', f='N/A', g='N/A', h=temp.U_NAME
@@ -392,7 +304,6 @@ async def get_token(bot, userid, link, fileid):
     user = await bot.get_users(userid)
     if not await db.is_user_exist(user.id):
         await db.add_user(user.id, user.first_name)
-        # FIX: use named args to match LOG_TEXT_P template placeholders
         await bot.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(
             a=user.id, b=user.mention, c=getattr(user, 'username', 'N/A'),
             d='N/A', e='N/A', f='N/A', g='N/A', h=temp.U_NAME

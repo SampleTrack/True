@@ -40,10 +40,6 @@ def generate_pm_buttons(files, pre):
 
 @Client.on_message(filters.private & filters.text & filters.incoming)
 async def pm_filter_handler(client, message):
-    # FIX 1: Allow commands to pass through to their respective command handlers immediately
-    if message.text.startswith(("/", "!", ".", ",")):
-        return
-
     # 1. Global Toggle Check
     if not PM_FILTER_ON:
         return
@@ -62,7 +58,8 @@ async def pm_filter_handler(client, message):
     text = message.text.strip()
     text_lower = text.lower()
 
-    if len(text) < 3:
+    # 3. Structural Validation & Ignored Text Filters
+    if len(text) < 3 or text_lower.startswith(("/", "!", ".", ",")):
         return
 
     IGNORE_TEXTS = {"hi", "hello", "ok", "hmm", "thanks", "thank you", "good morning", "good night", "yes", "no", "lol"}

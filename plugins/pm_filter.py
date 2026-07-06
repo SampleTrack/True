@@ -75,6 +75,8 @@ async def pm_filter_handler(client, message):
     if not search:
         return
 
+    # Automatically trigger auto-deletion for valid incoming user search messages
+    asyncio.create_task(safe_delete(message, 600))
     await execute_pm_filter(client, message, search)
 
 
@@ -108,7 +110,10 @@ async def execute_pm_filter(client, message, search, spoll_string=None):
         btn.append([InlineKeyboardButton(text="📃 Page 1 / 1", callback_data="pm_pages")])
 
     cap = f"<b>✨ PM Search Results for:</b> <code>{target_search}</code>"
-    await message.reply_text(cap, parse_mode=enums.ParseMode.HTML, reply_markup=InlineKeyboardMarkup(btn))
+    bot_reply = await message.reply_text(cap, parse_mode=enums.ParseMode.HTML, reply_markup=InlineKeyboardMarkup(btn))
+    
+    # Auto-delete the search results overview message after 10 minutes
+    asyncio.create_task(safe_delete(bot_reply, 600))
 
 
 # --- CALLBACK QUERY HANDLERS ---
@@ -173,12 +178,14 @@ async def pm_file_delivery(client, query):
             InlineKeyboardButton("Verify", url=await get_token(client, user_id, f"https://telegram.me/{temp.U_NAME}?start=", file_id)),
             InlineKeyboardButton("How To Verify", url=HOW_TO_VERIFY)
         ]]
-        await client.send_message(
+        verify_msg = await client.send_message(
             chat_id=user_id,
             text="<b>You are not verified!\nKindly complete verification to access content for 12 hours.</b>",
             parse_mode=enums.ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup(btn)
         )
+        # Auto-delete the verification prompt after 10 minutes
+        asyncio.create_task(safe_delete(verify_msg, 600))
         return await query.answer("Verification required! Complete check inside PM.", show_alert=True)
 
     try:
@@ -201,8 +208,14 @@ async def pm_file_delivery(client, query):
             ])
         )
         await query.answer('File delivered successfully!')
+        
+        # Auto-delete file references after 10 minutes to maintain copyright safety and cleanliness
         asyncio.create_task(safe_delete(info_msg, 600))
         asyncio.create_task(safe_delete(file_send, 600))
+        
+        # Clean up the original search list immediately once file delivery executes successfully
+        asyncio.create_task(safe_delete(query.message))
+        
     except UserIsBlocked:
         await query.answer('Please unblock the bot to route media transfers.', show_alert=True)
     except Exception as e:
@@ -234,7 +247,7 @@ async def pm_spellcheck_callback(bot, query):
 async def pm_language_alerts(bot, query):
     alerts = {
         "pm_hin": "कॉपीराइट के कारण फ़ाइल 10 मिनट में डिलीट हो जाएगी, इसे Saved Messages में सुरक्षित करें!",
-        "pm_mar": "कॉपीराइट मुळे ही ... फाइल 10 मिनिटांत डिलिट केली जाईल, Saved Messages मध्ये पाठवून डाउनलोड करा.",
+        "pm_mar": "कॉपीराइट मुळे ही ... ... फाइल 10 मिनिटांत डिलिट केली जाईल, Saved Messages मध्ये पाठवून डाउनलोड करा.",
         "pm_tel": "కాపీరైట్ కారణంగా ఈ ఫైల్ 10 నిమిషాల్లో తొలగిపోతుంది, సేవ్డ్ సందేశాలలో పంపించండి!"
     }
     if query.data in alerts:
@@ -278,3 +291,6 @@ async def pm_spell_check_handler(msg):
     
     reply_msg = await msg.reply("I couldn't locate exact file matches.\nDid you mean one of the following variations?", reply_markup=InlineKeyboardMarkup(btn))
     PM_SPELL_CHECK[reply_msg.id] = movielist
+    
+    # Auto-delete the spell check recommendation panel after 10 minutes
+    asyncio.create_task(safe_delete(reply_msg, 600))

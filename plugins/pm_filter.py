@@ -17,6 +17,7 @@ logger.setLevel(logging.ERROR)
 
 PM_BUTTONS = {}
 PM_SPELL_CHECK = {}
+DELETE_DELAY = 600  # 10 minutes lifetime for media links and messages
 
 # --- UTILITY FUNCTIONS ---
 
@@ -39,6 +40,10 @@ def generate_pm_buttons(files, pre):
 
 @Client.on_message(filters.private & filters.text & filters.incoming)
 async def pm_filter_handler(client, message):
+    # FIX 1: Allow commands to pass through to their respective command handlers immediately
+    if message.text.startswith(("/", "!", ".", ",")):
+        return
+
     # 1. Global Toggle Check
     if not PM_FILTER_ON:
         return
@@ -57,8 +62,7 @@ async def pm_filter_handler(client, message):
     text = message.text.strip()
     text_lower = text.lower()
 
-    # 3. Structural Validation & Ignored Text Filters
-    if len(text) < 3 or text_lower.startswith(("/", "!", ".", ",")):
+    if len(text) < 3:
         return
 
     IGNORE_TEXTS = {"hi", "hello", "ok", "hmm", "thanks", "thank you", "good morning", "good night", "yes", "no", "lol"}
@@ -76,7 +80,7 @@ async def pm_filter_handler(client, message):
         return
 
     # Automatically trigger auto-deletion for valid incoming user search messages
-    asyncio.create_task(safe_delete(message, 600))
+    asyncio.create_task(safe_delete(message, DELETE_DELAY))
     await execute_pm_filter(client, message, search)
 
 
@@ -87,12 +91,20 @@ async def execute_pm_filter(client, message, search, spoll_string=None):
 
     target_search = spoll_string if spoll_string else search
     
+    # FIX 2: Send a direct placeholder reply text to engage user focus instantly
+    status_msg = await client.send_message(
+        chat_id=message.chat.id,
+        text="<b>🔍 Searching database, please wait...</b>",
+        parse_mode=enums.ParseMode.HTML,
+        reply_to_message_id=message.id
+    )
+    
     files, offset, total_results = await get_search_results(target_search, offset=0, filter=True)
     
     if not files:
-        # If no files match and it wasn't already a spellcheck selection, trigger spellcheck
+        asyncio.create_task(safe_delete(status_msg))
         if not spoll_string:
-            return await pm_spell_check_handler(message)
+            return await pm_spell_check_handler(client, message)
         return
 
     # Generate results interface using unique pm prefix
@@ -110,10 +122,12 @@ async def execute_pm_filter(client, message, search, spoll_string=None):
         btn.append([InlineKeyboardButton(text="📃 Page 1 / 1", callback_data="pm_pages")])
 
     cap = f"<b>✨ PM Search Results for:</b> <code>{target_search}</code>"
-    bot_reply = await message.reply_text(cap, parse_mode=enums.ParseMode.HTML, reply_markup=InlineKeyboardMarkup(btn))
+    
+    # FIX 2 Cont.: Edit the existing placeholder message directly with complete results
+    await status_msg.edit_text(cap, parse_mode=enums.ParseMode.HTML, reply_markup=InlineKeyboardMarkup(btn))
     
     # Auto-delete the search results overview message after 10 minutes
-    asyncio.create_task(safe_delete(bot_reply, 600))
+    asyncio.create_task(safe_delete(status_msg, DELETE_DELAY))
 
 
 # --- CALLBACK QUERY HANDLERS ---
@@ -184,8 +198,7 @@ async def pm_file_delivery(client, query):
             parse_mode=enums.ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup(btn)
         )
-        # Auto-delete the verification prompt after 10 minutes
-        asyncio.create_task(safe_delete(verify_msg, 600))
+        asyncio.create_task(safe_delete(verify_msg, DELETE_DELAY))
         return await query.answer("Verification required! Complete check inside PM.", show_alert=True)
 
     try:
@@ -209,9 +222,9 @@ async def pm_file_delivery(client, query):
         )
         await query.answer('File delivered successfully!')
         
-        # Auto-delete file references after 10 minutes to maintain copyright safety and cleanliness
-        asyncio.create_task(safe_delete(info_msg, 600))
-        asyncio.create_task(safe_delete(file_send, 600))
+        # Auto-delete file references after 10 minutes to maintain safety
+        asyncio.create_task(safe_delete(info_msg, DELETE_DELAY))
+        asyncio.create_task(safe_delete(file_send, DELETE_DELAY))
         
     except UserIsBlocked:
         await query.answer('Please unblock the bot to route media transfers.', show_alert=True)
@@ -236,15 +249,20 @@ async def pm_spellcheck_callback(bot, query):
         
     selected_movie = movies[int(movie_idx)]
     await query.answer('Searching records...')
-    await execute_pm_filter(bot, query.message, search=None, spoll_string=selected_movie)
+    
+    # Save the original user text reference before dropping current interface layout
+    target_msg = query.message.reply_to_message
     await safe_delete(query.message)
+    
+    if target_msg:
+        await execute_pm_filter(bot, target_msg, search=None, spoll_string=selected_movie)
 
 
 @Client.on_callback_query(filters.regex(r"^pm_"))
 async def pm_language_alerts(bot, query):
     alerts = {
         "pm_hin": "कॉपीराइट के कारण फ़ाइल 10 मिनट में डिलीट हो जाएगी, इसे Saved Messages में सुरक्षित करें!",
-        "pm_mar": "कॉपीराइट मुळे ही ... ... फाइल 10 मिनिटांत डिलिट केली जाईल, Saved Messages मध्ये पाठवून डाउनलोड करा.",
+        "pm_mar": "कॉपीराइट मुळे ही फाइल 10 मिनिटांत डिलิต केली जाईल, Saved Messages मध्ये पाठवून डाउनलोड करा.",
         "pm_tel": "కాపీరైట్ కారణంగా ఈ ఫైల్ 10 నిమిషాల్లో తొలగిపోతుంది, సేవ్డ్ సందేశాలలో పంపించండి!"
     }
     if query.data in alerts:
@@ -255,7 +273,7 @@ async def pm_language_alerts(bot, query):
 
 # --- SPELL CHECK SYSTEM ---
 
-async def pm_spell_check_handler(msg):
+async def pm_spell_check_handler(client, msg):
     clean_regex = r"\b(pl(i|e)*?(s|z+|ease|se|ese)|((send|snd|giv(e)?|gib)(\sme)?)|movie(s)?|new|latest|br((o|u)h?)*|h(e|a)?(l)*(o)*|file|find|full\smovie|any(one)|with\ssubtitle(s)?)"
     query = re.sub(clean_regex, "", msg.text, flags=re.IGNORECASE).strip()
     
@@ -286,9 +304,14 @@ async def pm_spell_check_handler(msg):
     btn = [[InlineKeyboardButton(text=movie, callback_data=f"pmspolling#{user}#{idx}")] for idx, movie in enumerate(movielist)]
     btn.append([InlineKeyboardButton(text="Close", callback_data=f'pmspolling#{user}#close_pm_spell')])
     
-    reply_msg = await msg.reply("I couldn't locate exact file matches.\nDid you mean one of the following variations?", reply_markup=InlineKeyboardMarkup(btn))
+    reply_msg = await client.send_message(
+        chat_id=msg.chat.id,
+        text="<b>I couldn't locate exact file matches. Did you mean one of the following variations?</b>",
+        parse_mode=enums.ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(btn),
+        reply_to_message_id=msg.id
+    )
     PM_SPELL_CHECK[reply_msg.id] = movielist
     
     # Auto-delete the spell check recommendation panel after 10 minutes
-    asyncio.create_task(safe_delete(reply_msg, 600))
-    
+    asyncio.create_task(safe_delete(reply_msg, DELETE_DELAY))

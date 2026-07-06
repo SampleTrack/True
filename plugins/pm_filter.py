@@ -79,6 +79,10 @@ async def pm_filter_handler(client, message):
 
 
 async def execute_pm_filter(client, message, search, spoll_string=None):
+    user_id = message.from_user.id if message.from_user else 0
+    if not user_id:
+        return
+
     target_search = spoll_string if spoll_string else search
     
     files, offset, total_results = await get_search_results(target_search, offset=0, filter=True)
@@ -93,7 +97,7 @@ async def execute_pm_filter(client, message, search, spoll_string=None):
     btn = generate_pm_buttons(files, "pmfile")
 
     if offset != "":
-        key = f"pm-{message.from_user.id}-{message.id}"
+        key = f"pm-{user_id}-{message.id}"
         PM_BUTTONS[key] = target_search
         total_pages = math.ceil(int(total_results) / 10)
         btn.append([
@@ -218,7 +222,6 @@ async def pm_spellcheck_callback(bot, query):
         
     movies = PM_SPELL_CHECK.get(query.message.id)
     if not movies:
-        # Fallback check to original message ID if dictionary reference offset occurs
         return await query.answer("This listing sequence has expired. Submit a new search text.", show_alert=True)
         
     selected_movie = movies[int(movie_idx)]
@@ -269,12 +272,9 @@ async def pm_spell_check_handler(msg):
         asyncio.create_task(safe_delete(err, 8))
         return
 
-    # Use the sent reply message configuration space safely
     user = msg.from_user.id
     btn = [[InlineKeyboardButton(text=movie, callback_data=f"pmspolling#{user}#{idx}")] for idx, movie in enumerate(movielist)]
     btn.append([InlineKeyboardButton(text="Close", callback_data=f'pmspolling#{user}#close_pm_spell')])
     
     reply_msg = await msg.reply("I couldn't locate exact file matches.\nDid you mean one of the following variations?", reply_markup=InlineKeyboardMarkup(btn))
-    # Map the list using the reply message's ID for absolute precision during callback execution
     PM_SPELL_CHECK[reply_msg.id] = movielist
-

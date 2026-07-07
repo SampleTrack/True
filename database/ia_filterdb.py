@@ -27,7 +27,9 @@ class Media(Document):
     caption = fields.StrField(allow_none=True)
 
     class Meta:
-        indexes = ('$file_name', )
+        # '$file_name' -> full-text index (fast, uses inverted index)
+        # 'file_type'  -> normal index for the file_type filter (avoids scanning after text search too)
+        indexes = ('$file_name', 'file_type', )
         collection_name = COLLECTION_NAME
 
 
@@ -65,6 +67,33 @@ async def get_search_results(query, file_type=None, max_results=10, offset=0, fi
     """For given query return (results, next_offset, total_results)"""
 
     query = query.strip()
+
+    async def _run(filter):
+        total_results = await Media.count_documents(filter)
+        next_offset = offset + max_results
+        if next_offset > total_results:
+            next_offset = ''
+        cursor = Media.find(filter)
+        cursor.sort('$natural', -1)
+        cursor.skip(offset).limit(max_results)
+        files = await cursor.to_list(length=max_results)
+        return files, next_offset, total_results
+
+    # FAST PATH: use the text index ($text) instead of an unanchored regex.
+    # An unanchored regex forces a full collection scan (COLLSCAN) on every
+    # search. $text uses the inverted index declared on Media ('$file_name'),
+    # so it's dramatically faster once the collection grows past a few
+    # thousand documents.
+    if query:
+        text_filter = {'$text': {'$search': query}}
+        if file_type:
+            text_filter['file_type'] = file_type
+        files, next_offset, total_results = await _run(text_filter)
+        if total_results > 0:
+            return files, next_offset, total_results
+        # falls through to regex below if $text found nothing (e.g. the
+        # query is a partial substring like "aveng" that isn't a whole word)
+
     if not query:
         raw_pattern = '.'
     elif ' ' not in query:
@@ -75,7 +104,6 @@ async def get_search_results(query, file_type=None, max_results=10, offset=0, fi
     try:
         regex = re.compile(raw_pattern, flags=re.IGNORECASE)
     except re.error:
-        # FIX: return correct tuple type so callers can unpack safely
         return [], '', 0
 
     if USE_CAPTION_FILTER:
@@ -86,18 +114,7 @@ async def get_search_results(query, file_type=None, max_results=10, offset=0, fi
     if file_type:
         filter['file_type'] = file_type
 
-    total_results = await Media.count_documents(filter)
-    next_offset = offset + max_results
-
-    if next_offset > total_results:
-        next_offset = ''
-
-    cursor = Media.find(filter)
-    cursor.sort('$natural', -1)
-    cursor.skip(offset).limit(max_results)
-    files = await cursor.to_list(length=max_results)
-
-    return files, next_offset, total_results
+    return await _run(filter)
 
 
 async def get_file_details(query):

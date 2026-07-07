@@ -68,13 +68,16 @@ async def get_search_results(query, file_type=None, max_results=10, offset=0, fi
 
     query = query.strip()
 
-    async def _run(filter):
+    async def _run(filter, natural_sort=True):
         total_results = await Media.count_documents(filter)
         next_offset = offset + max_results
         if next_offset > total_results:
             next_offset = ''
         cursor = Media.find(filter)
-        cursor.sort('$natural', -1)
+        # Mongo does not allow $natural sort together with a $text query,
+        # so only apply it for the plain-regex path below.
+        if natural_sort:
+            cursor.sort('$natural', -1)
         cursor.skip(offset).limit(max_results)
         files = await cursor.to_list(length=max_results)
         return files, next_offset, total_results
@@ -88,7 +91,7 @@ async def get_search_results(query, file_type=None, max_results=10, offset=0, fi
         text_filter = {'$text': {'$search': query}}
         if file_type:
             text_filter['file_type'] = file_type
-        files, next_offset, total_results = await _run(text_filter)
+        files, next_offset, total_results = await _run(text_filter, natural_sort=False)
         if total_results > 0:
             return files, next_offset, total_results
         # falls through to regex below if $text found nothing (e.g. the

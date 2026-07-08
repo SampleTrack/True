@@ -38,7 +38,7 @@ def generate_pm_buttons(files, pre):
 
 # --- MESSAGE HANDLER ---
 
-@Client.on_message(filters.private & filters.text & filters.incoming)
+@Client.on_message(filters.private & filters.text & filters.incoming & ~filters.regex(r'^/'))
 async def pm_filter_handler(client, message):
     # 1. Global Toggle Check
     if not PM_FILTER_ON:
